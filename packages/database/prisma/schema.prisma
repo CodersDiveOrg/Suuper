@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Every tenant-scoped table carries tenantId + an index on it.
+// Isolation starts as shared-database/shared-schema enforced by Postgres
+// row-level security (see docs/ARCHITECTURE.md); isolationTier lets a given
+// tenant be promoted to a dedicated schema/database later without an app rewrite.
+model Tenant {
+  id             String          @id @default(uuid())
+  name           String
+  slug           String          @unique
+  isolationTier  String          @default("shared")
+  createdAt      DateTime        @default(now())
+  users          User[]
+  bots           Bot[]
+  mcpServers     McpServer[]
+  knowledgeBases KnowledgeBase[]
+}
+
+model User {
+  id        String   @id @default(uuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  email     String
+  role      String   @default("member")
+  createdAt DateTime @default(now())
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+}
+
+model Bot {
+  id               String   @id @default(uuid())
+  tenantId         String
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  name             String
+  systemPrompt     String
+  model            String   @default("claude-sonnet-5")
+  mcpServerIds     String[]
+  knowledgeBaseIds String[]
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+model McpServer {
+  id          String   @id @default(uuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  name        String
+  // "hosted": platform runs this server for the tenant. "external": tenant runs it themselves.
+  mode        String
+  endpointUrl String?
+  status      String   @default("provisioning")
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+model KnowledgeBase {
+  id         String   @id @default(uuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  name       String
+  sourceType String
+  status     String   @default("syncing")
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId])
+}
