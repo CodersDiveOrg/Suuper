@@ -14,6 +14,9 @@ export function loadServiceConfig(serviceName: string, defaultPort = 3000) {
     redisUrl: required("REDIS_URL", "redis://localhost:6380"),
     jwtSecret: required("JWT_SECRET", "dev-secret-change-me"),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+    // Internal service URLs api-gateway proxies to. Not used by services
+    // other than the gateway; harmless to load everywhere for now.
+    identityServiceUrl: required("IDENTITY_SERVICE_URL", "http://localhost:3001"),
   };
 }
 
