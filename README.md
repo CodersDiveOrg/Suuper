@@ -5,10 +5,12 @@ them tools via MCP servers, and ground them in the tenant's own knowledge base.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design.
 
+The frontend lives in a separate repo: [`ai-automation-platform-web`](../ai-automation-platform-web).
+
 ## Stack
 
-TypeScript everywhere — NestJS microservices, Next.js frontend, PostgreSQL (+ pgvector) via
-Prisma, Redis, targeting AWS (ECS Fargate, RDS, SQS/SNS, S3).
+TypeScript everywhere — NestJS microservices, PostgreSQL (+ pgvector) via Prisma, Redis,
+targeting AWS (ECS Fargate, RDS, SQS/SNS, S3).
 
 ## Getting started
 
@@ -24,7 +26,7 @@ cp .env.example .env
 pnpm --filter @platform/database run generate
 pnpm --filter @platform/database run migrate:dev --name init
 
-# run everything (each service + the dashboard) in dev mode
+# run every backend service in dev mode
 pnpm dev
 ```
 
@@ -32,7 +34,6 @@ Services and default ports:
 
 | Service | Port |
 |---|---|
-| `web` (dashboard) | 3100 |
 | `api-gateway` | 3010 |
 | `identity-service` | 3001 |
 | `bot-service` | 3002 |
@@ -44,7 +45,7 @@ Each backend service exposes `GET /health`.
 ## Repo layout
 
 ```
-apps/       one folder per deployable service + the web dashboard
+apps/       one folder per deployable service
 packages/   shared code: database (Prisma), types, config, auth
 infra/      docker-compose for local dev, Terraform for AWS (WIP)
 docs/       architecture and design docs

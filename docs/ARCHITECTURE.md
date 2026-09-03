@@ -32,7 +32,10 @@ provision to not have to re-architect for them.
 | `mcp-gateway` | Registry of tenant MCP servers; proxies MCP protocol calls; provisions/lifecycles hosted MCP servers. |
 | `knowledge-service` | Knowledge base CRUD, ingestion pipeline coordination, retrieval API (RAG) used by `bot-service`. |
 | `worker` | Async job runner behind a queue: document ingestion, embedding generation, MCP server provisioning. Keeps slow AI/IO work off the request path. |
-| `web` | Next.js tenant dashboard — manage bots, MCP servers, knowledge bases, users. |
+
+The tenant dashboard (Next.js) lives in a separate repo, `ai-automation-platform-web`, and talks
+to this backend exclusively through `api-gateway` — see that repo's README for its architecture
+(Redux Toolkit + Axios, route protection, API contract).
 
 Internal services are not reachable from outside the cluster; only `api-gateway` is. Services
 call each other over plain HTTP internally to start — no service mesh, no gRPC — because the
@@ -87,7 +90,6 @@ built/tested incrementally with caching, while still deploying independently.
 apps/
   api-gateway/       identity-service/   bot-service/
   mcp-gateway/        knowledge-service/  worker/
-  web/
 packages/
   database/           # Prisma schema + client (packages/database/prisma/schema.prisma)
   shared-types/        # Domain types shared by every service (Tenant, Bot, McpServer, ...)
@@ -101,7 +103,6 @@ infra/
 ## What's deliberately not built yet
 
 Every service currently exposes only a `/health` endpoint. No bot orchestration logic, MCP
-provisioning, ingestion pipeline, or dashboard UI beyond a placeholder page — those get built
-feature by feature on top of this skeleton, starting with `identity-service` (auth has to exist
-before anything else is meaningful) then `bot-service` + `mcp-gateway` together (a bot is only
-useful once it can call a tool).
+provisioning, or ingestion pipeline — those get built feature by feature on top of this skeleton,
+starting with `identity-service` (auth has to exist before anything else is meaningful) then
+`bot-service` + `mcp-gateway` together (a bot is only useful once it can call a tool).
