@@ -1,7 +1,13 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "./dist"
+    "outDir": "./dist",
+    // The repo uses classic "node" resolution, which ignores package "exports";
+    // map the MCP SDK's subpath imports to its CommonJS build so types resolve.
+    "baseUrl": ".",
+    "paths": {
+      "@modelcontextprotocol/sdk/*": ["node_modules/@modelcontextprotocol/sdk/dist/cjs/*"]
+    }
   },
   "include": ["src/**/*.ts"]
 }

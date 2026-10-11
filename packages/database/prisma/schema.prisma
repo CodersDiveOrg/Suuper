@@ -1,77 +1,389 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
-// Every tenant-scoped table carries tenantId + an index on it.
-// Isolation starts as shared-database/shared-schema enforced by Postgres
-// row-level security (see docs/ARCHITECTURE.md); isolationTier lets a given
-// tenant be promoted to a dedicated schema/database later without an app rewrite.
-model Tenant {
-  id             String          @id @default(uuid())
-  name           String
-  slug           String          @unique
-  isolationTier  String          @default("shared")
-  createdAt      DateTime        @default(now())
-  users          User[]
-  bots           Bot[]
-  mcpServers     McpServer[]
-  knowledgeBases KnowledgeBase[]
+// A business is an organisation on the platform. Every business-scoped table
+// carries businessId + an index on it. Isolation starts as shared-database /
+// shared-schema; isolationTier lets a given business be promoted to a
+// dedicated schema/database later without an app rewrite.
+model Business {
+  id                     String                  @id @default(uuid())
+  name                   String
+  slug                   String                  @unique
+  isolationTier          String                  @default("shared")
+  createdAt              DateTime                @default(now())
+  // Profile, collected during onboarding.
+  industry               String?
+  companySize            String?
+  website                String?
+  primaryGoal            String?
+  onboardingDismissedAt  DateTime?
+  memberships            Membership[]
+  roles                  Role[]
+  integrationConnections IntegrationConnection[]
+  invitations            Invitation[]
+  bots                   Bot[]
+  agents                 Agent[]
+  mcpServers             McpServer[]
+  knowledgeBases         KnowledgeBase[]
+  products               Product[]
 }
 
+// A user is a single global account. The same user can belong to many
+// businesses via Membership, with a different role in each.
 model User {
-  id           String   @id @default(uuid())
-  tenantId     String
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
-  email        String
-  passwordHash String
-  role         String   @default("member")
-  createdAt    DateTime @default(now())
+  id              String           @id @default(uuid())
+  email           String           @unique
+  passwordHash    String
+  name            String?
+  createdAt       DateTime         @default(now())
+  memberships     Membership[]
+  loginChallenges LoginChallenge[]
+}
 
-  @@unique([tenantId, email])
-  @@index([tenantId])
+// Second login step: after the password checks out, a short code is emailed
+// and must be entered to get a user token. Only the code's hash is stored.
+model LoginChallenge {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash   String
+  attempts   Int       @default(0)
+  expiresAt  DateTime
+  lastSentAt DateTime  @default(now())
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// A user's place in one business. role is a built-in role (owner | admin |
+// member | viewer — see packages/shared-types/src/business.ts) or the key of
+// one of the business's custom Roles.
+model Membership {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  role       String   @default("member")
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, businessId])
+  @@index([businessId])
+  @@index([userId])
+}
+
+// An outstanding invite for an email address to join a business at a given role.
+model Invitation {
+  id              String   @id @default(uuid())
+  businessId      String
+  business        Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  email           String
+  role            String   @default("member")
+  // sha256 of the invite token. The raw token only ever exists in the emailed
+  // link, so a database leak can't be used to accept invitations.
+  tokenHash       String   @unique
+  status          String   @default("pending") // pending | accepted | revoked | expired
+  invitedByUserId String
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  @@unique([businessId, email])
+  @@index([businessId])
+  @@index([email])
+}
+
+// A business-defined role. Built-in roles live in code; this table only holds
+// custom ones. Membership.role / Invitation.role reference it by key.
+model Role {
+  id          String   @id @default(uuid())
+  businessId  String
+  business    Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  key         String
+  name        String
+  description String?
+  permissions String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([businessId, key])
+  @@index([businessId])
+}
+
+// A business's connection to a third-party provider from the integration
+// catalog (packages/shared-types/src/integrations.ts). Non-secret fields live
+// in config; secret fields are AES-GCM encrypted into secretsEncrypted.
+model IntegrationConnection {
+  id                String   @id @default(uuid())
+  businessId        String
+  business          Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  provider          String
+  enabled           Boolean  @default(true)
+  config            Json     @default("{}")
+  secretsEncrypted  String
+  connectedByUserId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([businessId, provider])
+  @@index([businessId])
 }
 
 model Bot {
   id               String   @id @default(uuid())
-  tenantId         String
-  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  businessId       String
+  business         Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name             String
   systemPrompt     String
-  model            String   @default("claude-sonnet-5")
+  model            String   @default("llama3.2:1b")
   mcpServerIds     String[]
+  // Connected integrations (provider keys) whose actions this bot can call.
+  integrations     String[] @default([])
   knowledgeBaseIds String[]
   createdAt        DateTime @default(now())
+  // Public embed widget: off by default. widgetKey is a public, revocable
+  // identifier (not a secret bearer token) — anyone with it can chat with
+  // this bot from an origin in allowedOrigins. Regenerating it invalidates
+  // every live embed immediately.
+  widgetEnabled    Boolean  @default(false)
+  widgetKey        String   @unique @default(uuid())
+  allowedOrigins   String[] @default([])
 
-  @@index([tenantId])
+  @@index([businessId])
 }
 
-model McpServer {
-  id          String   @id @default(uuid())
-  tenantId    String
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  name        String
-  // "hosted": platform runs this server for the tenant. "external": tenant runs it themselves.
-  mode        String
-  endpointUrl String?
-  status      String   @default("provisioning")
-  createdAt   DateTime @default(now())
+// An internal AI assistant for the business owner/team (not a customer-facing
+// embeddable widget like Bot). Same chat shape as Bot but no widget fields.
+model Agent {
+  id               String              @id @default(uuid())
+  businessId       String
+  business         Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name             String
+  description      String?
+  systemPrompt     String
+  // "claude-*" runs on Anthropic (business's Anthropic integration key, else
+  // the platform ANTHROPIC_API_KEY); anything else is an Ollama model name.
+  model            String              @default("claude-opus-5-5")
+  // Built-in tools this agent may call (see apps/bot-service/src/agents/runtime/tools).
+  tools            String[]            @default([])
+  // Upper bound on model calls per run, so a tool loop can't run away.
+  maxSteps         Int                 @default(8)
+  // MCP servers whose tools this agent can call (mcp-gateway).
+  mcpServerIds     String[]
+  // Connected integrations (provider keys) whose actions this agent can call.
+  integrations     String[]            @default([])
+  knowledgeBaseIds String[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @default(now()) @updatedAt
+  conversations    AgentConversation[]
+  runs             AgentRun[]
 
-  @@index([tenantId])
+  @@index([businessId])
+}
+
+// A chat thread between one user and one agent. Private to that user.
+model AgentConversation {
+  id         String         @id @default(uuid())
+  businessId String
+  agentId    String
+  agent      Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  userId     String
+  title      String
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  messages   AgentMessage[]
+  runs       AgentRun[]
+
+  @@index([businessId, agentId, userId])
+}
+
+// One API-shaped message. content is the exact Anthropic content-block array
+// (text, tool_use, tool_result, thinking…) so history replays byte-for-byte —
+// required for prompt caching and preserved thinking. Tool results are "user"
+// messages, exactly as the Messages API expects.
+model AgentMessage {
+  id             String            @id @default(uuid())
+  conversationId String
+  conversation   AgentConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  runId          String?
+  role           String // "user" | "assistant"
+  content        Json
+  createdAt      DateTime          @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+// One execution of an agent: a user message (or later, a schedule/API
+// trigger) through to the final answer, including every tool call between.
+model AgentRun {
+  id             String             @id @default(uuid())
+  businessId     String
+  agentId        String
+  agent          Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversationId String?
+  conversation   AgentConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  userId         String?
+  trigger        String             @default("chat") // chat | api | schedule
+  status         String             @default("running") // running | succeeded | failed
+  model          String
+  input          String
+  output         String?
+  error          String?
+  inputTokens    Int                @default(0)
+  outputTokens   Int                @default(0)
+  startedAt      DateTime           @default(now())
+  finishedAt     DateTime?
+  steps          AgentRunStep[]
+
+  @@index([businessId, startedAt])
+  @@index([agentId, startedAt])
+  @@index([conversationId])
+}
+
+model AgentRunStep {
+  id         String   @id @default(uuid())
+  runId      String
+  run        AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  index      Int
+  type       String // "model" | "tool"
+  name       String? // tool name, or model id for model steps
+  input      Json?
+  output     Json?
+  isError    Boolean  @default(false)
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([runId, index])
+}
+
+// A business's MCP server. "external": the business runs it and we connect to
+// endpointUrl as an MCP client. "hosted": the platform serves it — tools are
+// defined in McpHostedTool (each wraps an HTTP API) and exposed over MCP at
+// /mcp/:id for our agents/bots and outside clients (with the access key).
+model McpServer {
+  id               String          @id @default(uuid())
+  businessId       String
+  business         Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name             String
+  description      String?
+  mode             String // "hosted" | "external"
+  endpointUrl      String?
+  // External only: "auto" tries Streamable HTTP, then falls back to legacy SSE.
+  transport        String          @default("auto") // auto | streamable_http | sse
+  authType         String          @default("none") // none | bearer | header
+  authHeaderName   String?
+  // External auth secret (bearer token / header value), AES-GCM encrypted.
+  secretsEncrypted String?
+  // Hosted only: sha256 of the client access key. The key itself is shown once.
+  accessKeyHash    String?         @unique
+  accessKeyPrefix  String?
+  enabled          Boolean         @default(true)
+  status           String          @default("pending") // pending | connected | error
+  lastError        String?
+  lastCheckedAt    DateTime?
+  // Last discovered tool list: [{ name, description, inputSchema }].
+  tools            Json            @default("[]")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @default(now()) @updatedAt
+  hostedTools      McpHostedTool[]
+  calls            McpToolCall[]
+
+  @@index([businessId])
+}
+
+// One tool on a hosted MCP server: calling it makes an HTTP request built from
+// a URL template ({{param}} placeholders) and returns the response.
+model McpHostedTool {
+  id                     String    @id @default(uuid())
+  serverId               String
+  server                 McpServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name                   String
+  description            String
+  // [{ name, type: string|number|integer|boolean, description?, required, enum? }]
+  parameters             Json      @default("[]")
+  method                 String    @default("GET") // GET | POST | PUT | PATCH | DELETE
+  urlTemplate            String
+  // Non-secret request headers.
+  headers                Json      @default("{}")
+  // Secret headers (e.g. Authorization), AES-GCM encrypted JSON object.
+  secretHeadersEncrypted String?
+  timeoutMs              Int       @default(15000)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@unique([serverId, name])
+}
+
+// Every MCP tool call made by the platform — tests from the UI, agents, bots.
+model McpToolCall {
+  id         String    @id @default(uuid())
+  businessId String
+  serverId   String
+  server     McpServer @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  toolName   String
+  source     String // test | agent | bot
+  userId     String?
+  input      Json
+  output     Json?
+  isError    Boolean   @default(false)
+  durationMs Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([serverId, createdAt])
+  @@index([businessId, createdAt])
 }
 
 model KnowledgeBase {
-  id         String   @id @default(uuid())
-  tenantId   String
-  tenant     Tenant   @relation(fields: [tenantId], references: [id])
-  name       String
-  sourceType String
-  status     String   @default("syncing")
-  createdAt  DateTime @default(now())
+  id           String    @id @default(uuid())
+  businessId   String
+  business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name         String
+  sourceType   String
+  // The store URL to ingest, for sourceType "crawl".
+  sourceUrl    String?
+  status       String    @default("syncing") // syncing | ready | error
+  // Set when status is "error"; e.g. "Could not find any products at that URL."
+  errorMessage String?
+  productCount Int       @default(0)
+  syncedAt     DateTime?
+  createdAt    DateTime  @default(now())
+  products     Product[]
 
-  @@index([tenantId])
+  @@index([businessId])
+}
+
+// One ingested store item: scraped from a KnowledgeBase's sourceUrl, embedded,
+// and retrieved by bot-service via knowledge-service's search endpoint.
+// `embedding` is Unsupported because Prisma has no native pgvector type —
+// writes and similarity search go through raw SQL (see knowledge-service).
+model Product {
+  id              String                      @id @default(uuid())
+  businessId      String
+  business        Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase               @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  // The store's own id for this product, for de-duplication on re-sync.
+  externalId      String?
+  title           String
+  description     String?
+  price           Float?
+  currency        String?
+  imageUrl        String?
+  productUrl      String
+  // Whatever the source tier returned, kept for debugging/re-processing.
+  raw             Json?
+  embedding       Unsupported("vector(768)")?
+  createdAt       DateTime                    @default(now())
+
+  @@unique([knowledgeBaseId, externalId])
+  @@index([businessId])
+  @@index([knowledgeBaseId])
 }

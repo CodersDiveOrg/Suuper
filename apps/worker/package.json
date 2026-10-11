@@ -9,8 +9,13 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@platform/database": "workspace:*",
+    "@platform/shared-ai": "workspace:*",
     "@platform/shared-config": "workspace:*",
-    "@platform/shared-types": "workspace:*"
+    "@platform/shared-types": "workspace:*",
+    "bullmq": "^6.3.6",
+    "cheerio": "^1.2.0",
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

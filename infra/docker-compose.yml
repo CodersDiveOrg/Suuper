@@ -26,6 +26,24 @@ services:
     volumes:
       - redis_data:/data
 
+  # Local, free embeddings + chat model runtime (packages/shared-ai talks to
+  # this instead of a paid provider). First run needs the models pulled:
+  #   docker compose -f infra/docker-compose.yml exec ollama ollama pull nomic-embed-text
+  #   docker compose -f infra/docker-compose.yml exec ollama ollama pull llama3.2:3b
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      # Ollama's default (5m) unloads the model between requests in local dev,
+      # where a full reload is slow — the next request then pays that cost on
+      # top of inference instead of just generating. Keep it resident.
+      OLLAMA_KEEP_ALIVE: -1
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
 volumes:
   postgres_data:
   redis_data:
+  ollama_data:

@@ -1,0 +1,14 @@
+{
+  "name": "@platform/widget",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/widget.ts --bundle --minify --format=iife --outfile=dist/widget.js",
+    "dev": "esbuild src/widget.ts --bundle --format=iife --outfile=dist/widget.js --watch --sourcemap",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "typescript": "^5.9.3"
+  }
+}
