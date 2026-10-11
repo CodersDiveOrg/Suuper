@@ -1,0 +1,166 @@
+# Production stack for a small shared server (1 vCPU / 4 GB, also running
+# another site). Every container has a hard memory + CPU cap so Suuper can
+# never starve its neighbours, logs are rotated, and only api-gateway and web
+# are published, on 127.0.0.1 for nginx (infra/nginx/suuper.conf).
+#
+# Images are built by GitHub Actions and pulled here: see infra/DEPLOY.md.
+#   docker compose -f infra/docker-compose.prod.yml --env-file .env up -d
+
+name: suuper
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend: &backend
+  image: ${API_IMAGE:?set API_IMAGE in .env}:${IMAGE_TAG:-latest}
+  restart: unless-stopped
+  env_file: ../.env
+  logging: *logging
+  mem_limit: 192m
+  cpus: 0.5
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_started
+
+x-service-env: &service-env
+  NODE_OPTIONS: --max-old-space-size=144
+  DATABASE_URL: postgresql://suuper:${POSTGRES_PASSWORD}@postgres:5432/suuper
+  REDIS_URL: redis://redis:6379
+  OLLAMA_URL: http://ollama:11434
+  IDENTITY_SERVICE_URL: http://identity-service:3001
+  BOT_SERVICE_URL: http://bot-service:3002
+  MCP_GATEWAY_URL: http://mcp-gateway:3003
+  KNOWLEDGE_SERVICE_URL: http://knowledge-service:3004
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: suuper
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: suuper
+    # Tuned down for a small box; defaults assume a dedicated server.
+    command: >
+      postgres -c shared_buffers=64MB -c effective_cache_size=192MB
+      -c work_mem=4MB -c maintenance_work_mem=32MB -c max_connections=40
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suuper"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+    mem_limit: 320m
+    cpus: 0.5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # BullMQ queues: never evict keys.
+    command: redis-server --maxmemory 48mb --maxmemory-policy noeviction --save 300 10
+    volumes:
+      - redis_data:/data
+    logging: *logging
+    mem_limit: 80m
+    cpus: 0.25
+
+  # Embeddings only (nomic-embed-text, ~300 MB). Chat runs on Claude models;
+  # local Llama models need more RAM than this server has to spare.
+  # Unloads the model after 5 idle minutes to give the memory back.
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 5m
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama_data:/root/.ollama
+    logging: *logging
+    mem_limit: 700m
+    cpus: 0.75
+
+  # One-shot: applies Prisma migrations, then exits. Services wait for it.
+  migrate:
+    image: ${API_IMAGE}:${IMAGE_TAG:-latest}
+    env_file: ../.env
+    environment: *service-env
+    working_dir: /app/packages/database
+    command: ["./node_modules/.bin/prisma", "migrate", "deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *logging
+    mem_limit: 256m
+    restart: "no"
+
+  api-gateway:
+    <<: *backend
+    working_dir: /app/apps/api-gateway
+    command: ["node", "dist/main.js"]
+    environment:
+      <<: *service-env
+      PORT: "3010"
+    ports:
+      - "127.0.0.1:3110:3010"
+
+  identity-service:
+    <<: *backend
+    working_dir: /app/apps/identity-service
+    command: ["node", "dist/main.js"]
+    environment:
+      <<: *service-env
+      PORT: "3001"
+
+  bot-service:
+    <<: *backend
+    working_dir: /app/apps/bot-service
+    command: ["node", "dist/main.js"]
+    environment:
+      <<: *service-env
+      PORT: "3002"
+
+  mcp-gateway:
+    <<: *backend
+    working_dir: /app/apps/mcp-gateway
+    command: ["node", "dist/main.js"]
+    environment:
+      <<: *service-env
+      PORT: "3003"
+
+  knowledge-service:
+    <<: *backend
+    working_dir: /app/apps/knowledge-service
+    command: ["node", "dist/main.js"]
+    environment:
+      <<: *service-env
+      PORT: "3004"
+
+  worker:
+    <<: *backend
+    working_dir: /app/apps/worker
+    command: ["node", "dist/main.js"]
+    environment: *service-env
+
+  web:
+    image: ${WEB_IMAGE:?set WEB_IMAGE in .env}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_OPTIONS: --max-old-space-size=192
+    ports:
+      - "127.0.0.1:3200:3200"
+    logging: *logging
+    mem_limit: 256m
+    cpus: 0.5
+
+volumes:
+  postgres_data:
+  redis_data:
+  ollama_data:
