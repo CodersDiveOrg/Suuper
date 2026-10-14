@@ -4,11 +4,12 @@ Target: a small shared server (1 vCPU / 4 GB + 4 GB swap) that also runs another
 The rules that keep it light:
 
 - **Images are built by GitHub Actions** and pushed to GHCR; the server only pulls them.
-- **Every container has a memory and CPU cap** (`infra/docker-compose.prod.yml`), about 2.5 GB at most in total.
+- **Every container has a memory and CPU cap** (`infra/docker-compose.prod.yml`), about 3.6 GB at most in total (normally ~0.5 GB, ~2 GB while a local model is loaded).
 - **Only nginx is public.** api-gateway and web listen on `127.0.0.1`; everything else is on
   the internal Docker network.
-- **Ollama runs embeddings only** (`nomic-embed-text`). Set bots and agents to a Claude model;
-  the local Llama models need more RAM than this server has.
+- **Ollama runs `nomic-embed-text` (embeddings) and `llama3.2:1b` (chat).** Pick
+  "Llama 3.2 1B (local)" for bots/agents unless there's an Anthropic key; `llama3.2:3b` is too
+  big and slow for this server.
 
 URL until there's a domain: `https://187.77.118.163:9443` (web), `…:9443/api` (api-gateway).
 
@@ -34,6 +35,7 @@ cp infra/production.env.example .env && chmod 600 .env
 
 ./infra/deploy.sh
 docker compose -f infra/docker-compose.prod.yml --env-file .env exec ollama ollama pull nomic-embed-text
+docker compose -f infra/docker-compose.prod.yml --env-file .env exec ollama ollama pull llama3.2:1b
 
 ln -s /opt/suuper/ai-automation-platform/infra/nginx/suuper.conf /etc/nginx/sites-enabled/suuper
 nginx -t && systemctl reload nginx

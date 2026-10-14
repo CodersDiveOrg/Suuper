@@ -71,9 +71,10 @@ services:
     mem_limit: 80m
     cpus: 0.25
 
-  # Embeddings only (nomic-embed-text, ~300 MB). Chat runs on Claude models;
-  # local Llama models need more RAM than this server has to spare.
-  # Unloads the model after 5 idle minutes to give the memory back.
+  # Embeddings (nomic-embed-text) + chat with llama3.2:1b (~1.45 GB loaded,
+  # ~9 tok/s on 1 vCPU). llama3.2:3b needs ~2.5 GB and is ~3x slower here;
+  # use Claude models for anything heavier. Only one model is loaded at a time,
+  # and it unloads after 5 idle minutes to give the memory back.
   ollama:
     image: ollama/ollama:latest
     restart: unless-stopped
@@ -84,7 +85,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     logging: *logging
-    mem_limit: 700m
+    mem_limit: 1800m
     cpus: 0.75
 
   # One-shot: applies Prisma migrations, then exits. Services wait for it.
