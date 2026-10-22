@@ -35,7 +35,7 @@ function readConfig() {
     widgetKey,
     gatewayOrigin: new URL(script.src).origin,
     themeColor: script.dataset.themeColor ?? "#111827",
-    greeting: script.dataset.greeting ?? "Hi! Ask me anything about our products.",
+    greeting: script.dataset.greeting ?? "Hi! How can I help you today?",
     position: script.dataset.position === "bottom-left" ? "bottom-left" : "bottom-right",
   };
 }

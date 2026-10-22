@@ -7,7 +7,7 @@ import {
   signBusinessToken,
 } from "@platform/shared-auth";
 import { loadServiceConfig } from "@platform/shared-config";
-import type { Product } from "@platform/shared-types";
+import type { KnowledgeSearchResult } from "@platform/shared-types";
 import { integrationCredentials, type ProviderName } from "./models";
 import type { ClientTool } from "./providers/types";
 
@@ -76,7 +76,7 @@ const searchKnowledge: ToolSpec<{ query: string }> = {
   definition: {
     name: "search_knowledge",
     description:
-      "Search the business's knowledge bases (product catalog and content) for items relevant to a query. Returns up to 8 matches with title, price, URL and description. Use it whenever the user asks about products, prices or anything the business sells.",
+      "Search the business's knowledge bases (product catalog, documents, FAQs and website pages) for anything relevant to a query. Returns matching products (title, price, URL, description) and passages (title, source URL, text). Use it whenever the user asks about products, prices, policies, services or anything else about the business.",
     input_schema: {
       type: "object",
       properties: { query: { type: "string", description: "What to search for, in natural language." } },
@@ -100,18 +100,20 @@ const searchKnowledge: ToolSpec<{ query: string }> = {
       role: "member",
       permissions: ["knowledge:read"],
     });
-    const response = await axios.post<Product[]>(
+    const response = await axios.post<KnowledgeSearchResult>(
       `${config.knowledgeServiceUrl}/businesses/current/knowledge-bases/search`,
       { query, knowledgeBaseIds: ctx.knowledgeBaseIds },
       { headers: { Authorization: `Bearer ${token}` }, timeout: HTTP_TIMEOUT_MS },
     );
-    const results = response.data.slice(0, 8).map((p) => ({
+    const products = (response.data.products ?? []).slice(0, 8).map((p) => ({
       title: p.title,
       price: p.price !== undefined ? `${p.price} ${p.currency ?? ""}`.trim() : undefined,
       url: p.productUrl,
       description: p.description?.slice(0, 400),
     }));
-    return { content: results.length ? JSON.stringify(results) : "No matching items found." };
+    const passages = (response.data.passages ?? []).map((p) => ({ title: p.title, url: p.sourceUrl, text: p.content }));
+    if (products.length === 0 && passages.length === 0) return { content: "No matching items found." };
+    return { content: JSON.stringify({ products, passages }) };
   },
 };
 

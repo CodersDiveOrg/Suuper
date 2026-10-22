@@ -15,6 +15,7 @@ import {
 import { HostedMcpProxyController, McpServersProxyController } from "./proxy/mcp-proxy.controller";
 import { WidgetProxyController } from "./proxy/widget-proxy.controller";
 import { WidgetAssetController } from "./proxy/widget-asset.controller";
+import { WorkflowsProxyController, WorkflowWebhookProxyController } from "./proxy/workflow-proxy.controller";
 
 @Module({
   controllers: [
@@ -30,6 +31,8 @@ import { WidgetAssetController } from "./proxy/widget-asset.controller";
     AgentRunsProxyController,
     AgentsProxyController,
     WidgetProxyController,
+    WorkflowsProxyController,
+    WorkflowWebhookProxyController,
     McpServersProxyController,
     HostedMcpProxyController,
     BusinessesProxyController,

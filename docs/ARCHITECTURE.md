@@ -131,7 +131,8 @@ history is persisted, each message is answered independently.
 - **Redis (ElastiCache)** — caching, session data, light job queues.
 - **SQS/SNS** — cross-service async events and the `worker` job queue (managed, no ops burden;
   revisit Kafka/NATS only if event volume outgrows it).
-- **S3** — uploaded knowledge base files.
+- **S3** — uploaded knowledge base files. (For now, uploads are held in `KnowledgeDocument.fileData`
+  only until the worker extracts their text, so no object store is needed yet.)
 - **ECS Fargate** — container hosting to start (lower ops overhead than EKS). Services are plain
   containers with no Fargate-specific code, so moving to EKS later, if/when team size or scaling
   needs justify the added complexity, is an infra change, not an app change.
@@ -163,12 +164,21 @@ infra/
 - `identity-service`: register/login, user + business tokens, business session exchange,
   self-serve business creation, membership listing, role changes (with last-owner protection),
   invitations (create / list / revoke / public preview / accept).
-- `knowledge-service`: knowledge base CRUD (`businesses/current/knowledge-bases`), enqueues
-  ingestion jobs, internal `/search` endpoint (embed query -> pgvector nearest-neighbor).
+- `knowledge-service`: knowledge base CRUD (`businesses/current/knowledge-bases`), document sources
+  for "documents" knowledge bases (file / FAQ / text / website), enqueues ingestion jobs, internal
+  `/search` endpoint (embed query once -> pgvector nearest-neighbor over `Product` and
+  `KnowledgeChunk`).
 - `bot-service`: bot CRUD (`businesses/current/bots`) and the stateless single-turn playground
-  chat endpoint (`POST .../bots/:id/messages`) — see "Product recommendation flow" above.
+  chat endpoint (`POST .../bots/:id/messages`) — see "Product recommendation flow" above. Also
+  workflows (`businesses/current/workflows`, public `hooks/workflows/:key`): CRUD, plus an in-process
+  BullMQ worker on the `run-workflow` queue that executes runs and schedule triggers (job
+  schedulers, reconciled against the database on startup). They live here because steps reuse the
+  agent runtime's models, knowledge search and integration actions.
 - `worker`: BullMQ consumer for `ingest-knowledge-base` jobs; tiered store scraper (Shopify /
-  WooCommerce / JSON-LD / local-LLM fallback) + embedding + `Product` write-back.
+  WooCommerce / JSON-LD / local-LLM fallback) + embedding + `Product` write-back. Jobs with a
+  `documentId` instead extract text (pdf-parse, mammoth, or a same-host website crawl capped at 25
+  pages and checked by the SSRF guard on every hop), chunk it, embed it, and replace that document's
+  `KnowledgeChunk`s. Uploaded file bytes are dropped once extracted.
 - `api-gateway`: proxies `/auth`, `/businesses`, `/invitations` to `identity-service`,
   `/businesses/current/knowledge-bases` to `knowledge-service`, and `/businesses/current/bots` to
   `bot-service`.

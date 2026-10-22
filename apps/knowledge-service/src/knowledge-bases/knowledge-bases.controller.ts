@@ -5,6 +5,8 @@ import { KnowledgeBasesService } from "./knowledge-bases.service";
 
 interface CreateKnowledgeBaseBody {
   name?: string;
+  /** "crawl" (default) or "documents". */
+  sourceType?: string;
   sourceUrl?: string;
 }
 
@@ -28,6 +30,7 @@ export class KnowledgeBasesController {
     return this.knowledgeBasesService.create(
       request.businessContext.businessId,
       body.name ?? "",
+      body.sourceType ?? "crawl",
       body.sourceUrl ?? "",
     );
   }
@@ -59,6 +62,43 @@ export class KnowledgeBasesController {
   @RequirePermission("knowledge:read")
   async products(@Req() request: { businessContext: BusinessContext }, @Param("id") id: string) {
     return this.knowledgeBasesService.listProducts(request.businessContext.businessId, id);
+  }
+
+  @Get(":id/documents")
+  @RequirePermission("knowledge:read")
+  async documents(@Req() request: { businessContext: BusinessContext }, @Param("id") id: string) {
+    return this.knowledgeBasesService.listDocuments(request.businessContext.businessId, id);
+  }
+
+  @Post(":id/documents")
+  @RequirePermission("knowledge:write")
+  async addDocument(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("id") id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    return this.knowledgeBasesService.addDocument(request.businessContext.businessId, id, body ?? {});
+  }
+
+  @Post(":id/documents/:documentId/reprocess")
+  @RequirePermission("knowledge:write")
+  async reprocessDocument(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("id") id: string,
+    @Param("documentId") documentId: string,
+  ) {
+    return this.knowledgeBasesService.reprocessDocument(request.businessContext.businessId, id, documentId);
+  }
+
+  @Delete(":id/documents/:documentId")
+  @HttpCode(204)
+  @RequirePermission("knowledge:write")
+  async removeDocument(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("id") id: string,
+    @Param("documentId") documentId: string,
+  ) {
+    await this.knowledgeBasesService.removeDocument(request.businessContext.businessId, id, documentId);
   }
 
   @Delete(":id")

@@ -11,11 +11,14 @@
   "dependencies": {
     "@platform/database": "workspace:*",
     "@platform/shared-ai": "workspace:*",
+    "@platform/shared-auth": "workspace:*",
     "@platform/shared-config": "workspace:*",
     "@platform/shared-types": "workspace:*",
     "bullmq": "^6.3.6",
     "cheerio": "^1.2.0",
-    "ioredis": "^6.0.0"
+    "ioredis": "^6.0.0",
+    "mammoth": "^1.13.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

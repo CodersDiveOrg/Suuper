@@ -1,16 +1,13 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import axios from "axios";
 import { prisma } from "@platform/database";
 import { chat, type ChatTurn } from "@platform/shared-ai";
-import { loadServiceConfig } from "@platform/shared-config";
-import type { Product } from "@platform/shared-types";
 import { AGENT_MODELS, anthropicApiKey, findModel } from "./runtime/models";
 import { isToolKey, toolCatalog } from "./runtime/tools";
 import { validMcpServerIds } from "./runtime/mcp-ids";
 import { validIntegrations } from "./runtime/integration-ids";
 import { integrationToolCatalog } from "./runtime/integrations";
+import { buildKnowledgePrompt, searchKnowledge } from "./runtime/knowledge";
 
-const config = loadServiceConfig("bot-service", 3002);
 
 export interface AgentRow {
   id: string;
@@ -174,54 +171,21 @@ export class AgentsService {
   }
 
   /** Stateless single-turn, same as BotsService.sendMessage: no memory between
-   * calls yet — each message is answered from scratch using freshly retrieved products. */
+   * calls yet — each message is answered from scratch using freshly retrieved knowledge. */
   async sendMessage(businessId: string, id: string, message: string, authorization: string | undefined) {
     if (!message.trim()) throw new BadRequestException("message is required");
     const agent = await this.require(businessId, id);
-    const products = await this.searchKnowledge(agent.knowledgeBaseIds, message, authorization);
+    const knowledge = await searchKnowledge(agent.knowledgeBaseIds, message, authorization);
 
     const messages: ChatTurn[] = [
       { role: "system", content: agent.systemPrompt },
-      { role: "user", content: this.buildPrompt(message, products) },
+      { role: "user", content: buildKnowledgePrompt(message, knowledge, "Question") },
     ];
     const reply = await chat(messages, agent.model);
-    return { reply, products };
+    return { reply, ...knowledge };
   }
 
-  private buildPrompt(message: string, products: Product[]): string {
-    if (products.length === 0) {
-      return `${message}\n\n(No matching products were found in the knowledge base — say so rather than inventing one.)`;
-    }
-    const catalog = products
-      .map((product, i) => {
-        const price =
-          product.price !== undefined ? ` — ${product.price} ${product.currency ?? ""}`.trimEnd() : "";
-        const description = product.description ? `\n   ${product.description}` : "";
-        return `${i + 1}. ${product.title}${price}${description}`;
-      })
-      .join("\n");
-    return `Relevant products:\n${catalog}\n\nQuestion: ${message}`;
-  }
 
-  /** Calls knowledge-service directly (internal HTTP), forwarding the same
-   * business-scoped token the incoming chat request carried. */
-  private async searchKnowledge(
-    knowledgeBaseIds: string[],
-    query: string,
-    authorization: string | undefined,
-  ): Promise<Product[]> {
-    if (knowledgeBaseIds.length === 0) return [];
-    try {
-      const response = await axios.post(
-        `${config.knowledgeServiceUrl}/businesses/current/knowledge-bases/search`,
-        { query, knowledgeBaseIds },
-        { headers: authorization ? { Authorization: authorization } : undefined },
-      );
-      return response.data as Product[];
-    } catch {
-      return [];
-    }
-  }
 
   async require(businessId: string, id: string): Promise<AgentRow> {
     const agent = await prisma.agent.findUnique({ where: { id } });

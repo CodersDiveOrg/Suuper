@@ -171,27 +171,67 @@ addresses blocked) unless `MCP_ALLOW_PRIVATE_URLS=true` (local dev only).
 
 ## Knowledge base & bot API (via `api-gateway`)
 
-The first working bot type: point a knowledge base at a store URL, it ingests the catalog, then a
-bot answers shopping questions grounded in what it found. See docs/ARCHITECTURE.md's "Product
-recommendation flow" for the full pipeline (scrape tiers, embeddings, retrieval).
+Two kinds of knowledge base. A **store catalog** (`sourceType: "crawl"`) points at a store URL and
+ingests its products. See docs/ARCHITECTURE.md's "Product recommendation flow" for that pipeline
+(scrape tiers, embeddings, retrieval). A **documents** knowledge base (`sourceType: "documents"`)
+starts empty and takes sources: uploaded files (PDF, DOCX, TXT, MD, CSV up to 5 MB, sent base64),
+FAQ lists, pasted text, and websites (up to 25 same-site pages). The worker extracts each source,
+splits it into ~1,000-character passages and embeds them. Search returns both products and passages.
 
 | Method & path | Auth | Purpose |
 |---|---|---|
-| `POST /businesses/current/knowledge-bases` | `knowledge:write` | `{ name, sourceUrl }` — starts async ingestion |
+| `POST /businesses/current/knowledge-bases` | `knowledge:write` | `{ name, sourceType: "crawl", sourceUrl }` starts async ingestion; `{ name, sourceType: "documents" }` creates an empty one |
 | `GET /businesses/current/knowledge-bases` | `knowledge:read` | List knowledge bases + status/product count |
 | `GET /businesses/current/knowledge-bases/:id` | `knowledge:read` | One knowledge base's status/error |
 | `GET /businesses/current/knowledge-bases/:id/products` | `knowledge:read` | Products ingested into it |
-| `DELETE /businesses/current/knowledge-bases/:id` | `knowledge:write` | Delete it + its products, and detach it from any bot |
+| `GET /businesses/current/knowledge-bases/:id/documents` | `knowledge:read` | Sources of a documents knowledge base, each with status/passage count |
+| `POST /businesses/current/knowledge-bases/:id/documents` | `knowledge:write` | `{ type: "file", fileName, dataBase64 }` / `{ type: "faq", title?, items: [{ question, answer }] }` / `{ type: "text", title, text }` / `{ type: "website", url, title? }` — queued for processing |
+| `POST /businesses/current/knowledge-bases/:id/documents/:documentId/reprocess` | `knowledge:write` | Re-read a source (e.g. re-crawl a website) |
+| `DELETE /businesses/current/knowledge-bases/:id/documents/:documentId` | `knowledge:write` | Remove a source and its passages |
+| `POST /businesses/current/knowledge-bases/search` | `knowledge:read` | `{ query, knowledgeBaseIds }` -> `{ products, passages }` (used by bot-service) |
+| `DELETE /businesses/current/knowledge-bases/:id` | `knowledge:write` | Delete it + its products and documents, and detach it from any bot |
 | `POST /businesses/current/bots` | `bots:write` | `{ name, systemPrompt, knowledgeBaseIds }` |
 | `GET /businesses/current/bots` | `bots:read` | List bots |
 | `PATCH /businesses/current/bots/:id` | `bots:write` | Update name/prompt/knowledge bases |
 | `DELETE /businesses/current/bots/:id` | `bots:write` | Remove a bot |
-| `POST /businesses/current/bots/:id/messages` | `bots:run` | The playground endpoint: `{ message }` -> `{ reply, products }` |
+| `POST /businesses/current/bots/:id/messages` | `bots:run` | The playground endpoint: `{ message }` -> `{ reply, products, passages }` |
 
-A knowledge base's `status` is `syncing` -> `ready` (with a `productCount`) or `error` (with an
-`errorMessage`) — poll `GET .../knowledge-bases/:id` until it leaves `syncing` before attaching it
-to a bot. Chat is stateless single-turn for now: no conversation history is persisted between
+A store catalog's `status` is `syncing` -> `ready` (with a `productCount`) or `error` (with an
+`errorMessage`). Poll `GET .../knowledge-bases/:id` until it leaves `syncing` before attaching it
+to a bot. A documents knowledge base is `syncing` while any source is processing; each source has
+its own `processing` -> `ready` / `error` status. Chat is stateless single-turn for now: no conversation history is persisted between
 calls to `.../messages`.
+
+## Workflows API (via `api-gateway`, served by `bot-service`)
+
+A workflow is one trigger plus up to 15 steps, built in the dashboard's Workflows section. Shapes
+are in `packages/shared-types/src/workflow.ts`.
+
+- **Triggers:** `manual` (Run button / API), `schedule` (every 5–30 minutes, hourly, daily or
+  weekly, in a timezone; BullMQ job schedulers), `webhook` (public URL, 60 calls/min per workflow).
+  Schedules and webhooks only fire while the workflow is turned on.
+- **Steps:** `ai` (prompt -> `{ text }`, any agent model, optional knowledge bases), `action` (any
+  integration action, with the business's connected credentials; max 10 sends per run), `http`
+  (SSRF-guarded request -> `{ status, body }`), `condition` (stops the run, as "stopped", unless true).
+- **Data:** step fields take `{{trigger.path}}` and `{{steps.<stepId>.path}}` placeholders.
+  Values inserted into a JSON HTTP body are JSON-escaped.
+
+Runs execute in bot-service on the `run-workflow` queue (concurrency 2); each step's input, output
+and error are stored on the `WorkflowRun` as it finishes.
+
+| Method & path | Auth | Purpose |
+|---|---|---|
+| `GET /businesses/current/workflows` | `workflows:read` | List workflows with their last run |
+| `POST /businesses/current/workflows` | `workflows:write` | `{ name, trigger?, steps? }` (created turned off) |
+| `GET /businesses/current/workflows/catalog` | `workflows:read` | Models and app actions (with fields and connection status) for the builder |
+| `GET /businesses/current/workflows/:id` | `workflows:read` | One workflow, including its `webhookUrl` |
+| `PATCH /businesses/current/workflows/:id` | `workflows:write` | Update name / trigger / steps / `enabled` (syncs its schedule) |
+| `DELETE /businesses/current/workflows/:id` | `workflows:write` | Delete it, its runs and its schedule |
+| `POST /businesses/current/workflows/:id/webhook/regenerate` | `workflows:write` | New webhook URL; the old one stops working |
+| `POST /businesses/current/workflows/:id/run` | `workflows:run` | `{ triggerData? }` — queue a run now, on or off |
+| `GET /businesses/current/workflows/:id/runs` | `workflows:read` | Recent runs with per-step results |
+| `GET /businesses/current/workflows/:id/runs/:runId` | `workflows:read` | One run |
+| `POST /hooks/workflows/:webhookKey` | — (key in URL) | Start a webhook workflow; the JSON body becomes `{{trigger.…}}` |
 
 ## Repo layout
 

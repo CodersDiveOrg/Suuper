@@ -104,6 +104,9 @@ export type Permission =
   | "agents:read"
   | "agents:write"
   | "agents:run"
+  | "workflows:read"
+  | "workflows:write"
+  | "workflows:run"
   | "mcp:read"
   | "mcp:write"
   | "knowledge:read"
@@ -124,6 +127,9 @@ export const ALL_PERMISSIONS: Permission[] = [
   "agents:read",
   "agents:write",
   "agents:run",
+  "workflows:read",
+  "workflows:write",
+  "workflows:run",
   "mcp:read",
   "mcp:write",
   "knowledge:read",
@@ -155,6 +161,9 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "agents:read",
     "agents:write",
     "agents:run",
+    "workflows:read",
+    "workflows:write",
+    "workflows:run",
     "mcp:read",
     "mcp:write",
     "knowledge:read",
@@ -170,6 +179,8 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "bots:run",
     "agents:read",
     "agents:run",
+    "workflows:read",
+    "workflows:run",
     "mcp:read",
     "knowledge:read",
     "integrations:read",
@@ -179,6 +190,7 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "members:read",
     "bots:read",
     "agents:read",
+    "workflows:read",
     "mcp:read",
     "knowledge:read",
     "integrations:read",

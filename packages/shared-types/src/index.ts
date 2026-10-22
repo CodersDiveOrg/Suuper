@@ -5,3 +5,4 @@ export * from "./jobs";
 export * from "./integrations";
 export * from "./onboarding";
 export * from "./mcp";
+export * from "./workflow";

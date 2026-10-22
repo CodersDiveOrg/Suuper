@@ -2,6 +2,7 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { loadServiceConfig } from "@platform/shared-config";
 import { INGEST_KNOWLEDGE_BASE_QUEUE, type IngestKnowledgeBaseJob } from "@platform/shared-types";
+import { processDocument } from "./ingestion/documents/process-document";
 import { processKnowledgeBase } from "./ingestion/process-knowledge-base";
 
 // Background job runner: document ingestion, embedding generation, MCP
@@ -14,8 +15,10 @@ async function main() {
   const worker = new Worker<IngestKnowledgeBaseJob>(
     INGEST_KNOWLEDGE_BASE_QUEUE,
     async (job) => {
-      console.log(`[worker] processing job ${job.id} (knowledgeBaseId=${job.data.knowledgeBaseId})`);
-      await processKnowledgeBase(job.data.knowledgeBaseId);
+      const { knowledgeBaseId, documentId } = job.data;
+      console.log(`[worker] processing job ${job.id} (knowledgeBaseId=${knowledgeBaseId}, documentId=${documentId ?? "-"})`);
+      if (documentId) await processDocument(knowledgeBaseId, documentId);
+      else await processKnowledgeBase(knowledgeBaseId);
     },
     { connection },
   );

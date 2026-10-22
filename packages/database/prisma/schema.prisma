@@ -34,6 +34,9 @@ model Business {
   mcpServers             McpServer[]
   knowledgeBases         KnowledgeBase[]
   products               Product[]
+  knowledgeDocuments     KnowledgeDocument[]
+  knowledgeChunks        KnowledgeChunk[]
+  workflows              Workflow[]
 }
 
 // A user is a single global account. The same user can belong to many
@@ -346,6 +349,8 @@ model KnowledgeBase {
   businessId   String
   business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name         String
+  // "crawl": a store's product catalog scraped from sourceUrl.
+  // "documents": files, FAQs, text and website pages added as KnowledgeDocuments.
   sourceType   String
   // The store URL to ingest, for sourceType "crawl".
   sourceUrl    String?
@@ -356,6 +361,8 @@ model KnowledgeBase {
   syncedAt     DateTime?
   createdAt    DateTime  @default(now())
   products     Product[]
+  documents    KnowledgeDocument[]
+  chunks       KnowledgeChunk[]
 
   @@index([businessId])
 }
@@ -386,4 +393,99 @@ model Product {
   @@unique([knowledgeBaseId, externalId])
   @@index([businessId])
   @@index([knowledgeBaseId])
+}
+
+// One source added to a "documents" knowledge base: an uploaded file, an FAQ
+// list, pasted text or a website. The worker turns it into KnowledgeChunks.
+model KnowledgeDocument {
+  id              String           @id @default(uuid())
+  businessId      String
+  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase    @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  type            String // file | faq | text | website
+  title           String
+  // website: the start URL. file: unset.
+  sourceUrl       String?
+  fileName        String?
+  mimeType        String?
+  // Uploaded file bytes, held only until the worker has extracted the text.
+  fileData        Bytes?
+  // file/website: filled by the worker. faq/text: set on creation.
+  text            String?
+  // faq: [{ question, answer }]
+  faqItems        Json?
+  status          String           @default("processing") // processing | ready | error
+  errorMessage    String?
+  chunkCount      Int              @default(0)
+  createdAt       DateTime         @default(now())
+  processedAt     DateTime?
+  chunks          KnowledgeChunk[]
+
+  @@index([businessId])
+  @@index([knowledgeBaseId])
+}
+
+// A passage of a KnowledgeDocument, embedded for retrieval alongside Products.
+// `embedding` is Unsupported for the same reason as Product.embedding.
+model KnowledgeChunk {
+  id              String                      @id @default(uuid())
+  businessId      String
+  business        Business                    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  knowledgeBaseId String
+  knowledgeBase   KnowledgeBase               @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+  documentId      String
+  document        KnowledgeDocument           @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  position        Int
+  content         String
+  // Page the passage came from (website documents); else the document title.
+  title           String
+  sourceUrl       String?
+  embedding       Unsupported("vector(768)")?
+  createdAt       DateTime                    @default(now())
+
+  @@index([businessId])
+  @@index([knowledgeBaseId])
+  @@index([documentId])
+}
+
+// An automation: one trigger plus ordered steps (see packages/shared-types
+// workflow.ts for the JSON shapes). Executed by bot-service's workflow runner.
+model Workflow {
+  id          String        @id @default(uuid())
+  businessId  String
+  business    Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  // Schedule and webhook triggers only fire while enabled.
+  enabled     Boolean       @default(false)
+  trigger     Json
+  steps       Json          @default("[]")
+  // Public, revocable identifier in the webhook URL (like Bot.widgetKey).
+  webhookKey  String        @unique @default(uuid())
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @default(now()) @updatedAt
+  runs        WorkflowRun[]
+
+  @@index([businessId])
+}
+
+model WorkflowRun {
+  id          String    @id @default(uuid())
+  businessId  String
+  workflowId  String
+  workflow    Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  trigger     String // manual | webhook | schedule
+  status      String    @default("queued") // queued | running | succeeded | failed | stopped
+  triggerData Json?
+  // WorkflowStepResult[], appended as each step finishes.
+  steps       Json      @default("[]")
+  error       String?
+  // Who pressed "Run now", for manual runs.
+  userId      String?
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  @@index([workflowId, startedAt])
+  @@index([businessId, startedAt])
 }

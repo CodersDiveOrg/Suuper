@@ -1,11 +1,9 @@
 import { randomUUID } from "crypto";
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import axios from "axios";
 import { prisma } from "@platform/database";
 import { chat, type ChatTurn } from "@platform/shared-ai";
-import { loadServiceConfig } from "@platform/shared-config";
 import { signBusinessToken } from "@platform/shared-auth";
-import type { Product, WidgetSettings } from "@platform/shared-types";
+import type { KnowledgeSearchResult, WidgetSettings } from "@platform/shared-types";
 import { AGENT_MODELS, findModel, requireAnthropicKey } from "../agents/runtime/models";
 import { AnthropicProvider } from "../agents/runtime/providers/anthropic";
 import { OllamaProvider } from "../agents/runtime/providers/ollama";
@@ -13,11 +11,11 @@ import { buildToolSet } from "../agents/runtime/toolset";
 import { runStatelessLoop } from "../agents/runtime/stateless-loop";
 import { validMcpServerIds } from "../agents/runtime/mcp-ids";
 import { validIntegrations } from "../agents/runtime/integration-ids";
+import { buildKnowledgePrompt, searchKnowledge } from "../agents/runtime/knowledge";
 
 // Bots answer in one request (and from the public widget), so keep tool loops short.
 const BOT_MAX_STEPS = 5;
 
-const config = loadServiceConfig("bot-service", 3002);
 
 export interface BotRow {
   id: string;
@@ -107,12 +105,12 @@ export class BotsService {
   }
 
   /** Stateless single-turn (see docs/ARCHITECTURE.md): no memory between calls
-   * yet — each message is answered from scratch using freshly retrieved products. */
+   * yet — each message is answered from scratch using freshly retrieved knowledge. */
   async sendMessage(businessId: string, id: string, message: string, authorization: string | undefined) {
     if (!message.trim()) throw new BadRequestException("message is required");
     const bot = await this.require(businessId, id);
-    const products = await this.searchKnowledge(bot.knowledgeBaseIds, message, authorization);
-    return this.sendMessageForBot(bot, message, products);
+    const knowledge = await searchKnowledge(bot.knowledgeBaseIds, message, authorization);
+    return this.sendMessageForBot(bot, message, knowledge);
   }
 
   /** Called from the public embed widget — there's no caller bearer token to forward,
@@ -125,21 +123,21 @@ export class BotsService {
       role: "member",
       permissions: ["knowledge:read"],
     });
-    const products = await this.searchKnowledge(bot.knowledgeBaseIds, message, `Bearer ${internalToken}`);
-    return this.sendMessageForBot(bot, message, products);
+    const knowledge = await searchKnowledge(bot.knowledgeBaseIds, message, `Bearer ${internalToken}`);
+    return this.sendMessageForBot(bot, message, knowledge);
   }
 
-  private async sendMessageForBot(bot: BotRow, message: string, products: Product[]) {
+  private async sendMessageForBot(bot: BotRow, message: string, knowledge: KnowledgeSearchResult) {
     // Tools, or a Claude model, go through the provider layer; plain local bots keep the simple path.
     if (bot.mcpServerIds.length > 0 || bot.integrations.length > 0 || findModel(bot.model)?.provider === "anthropic") {
-      return this.sendWithTools(bot, message, products);
+      return this.sendWithTools(bot, message, knowledge);
     }
     const messages: ChatTurn[] = [
       { role: "system", content: bot.systemPrompt },
-      { role: "user", content: this.buildPrompt(message, products) },
+      { role: "user", content: buildKnowledgePrompt(message, knowledge, "Customer question") },
     ];
     const reply = await chat(messages, bot.model);
-    return { reply, products };
+    return { reply, ...knowledge };
   }
 
   private validModel(model: unknown) {
@@ -150,7 +148,7 @@ export class BotsService {
   }
 
   /** Bots with MCP servers attached run a short tool loop over those servers' tools. */
-  private async sendWithTools(bot: BotRow, message: string, products: Product[]) {
+  private async sendWithTools(bot: BotRow, message: string, knowledge: KnowledgeSearchResult) {
     const model = findModel(bot.model);
     const providerName = model?.provider ?? "ollama";
     const provider =
@@ -170,11 +168,11 @@ export class BotsService {
       provider,
       model: bot.model,
       system: bot.systemPrompt,
-      userContent: this.buildPrompt(message, products),
+      userContent: buildKnowledgePrompt(message, knowledge, "Customer question"),
       toolSet,
       maxSteps: BOT_MAX_STEPS,
     });
-    return { reply, products, toolCalls };
+    return { reply, ...knowledge, toolCalls };
   }
 
   async getWidgetSettings(businessId: string, id: string): Promise<WidgetSettings> {
@@ -218,40 +216,7 @@ export class BotsService {
     return prisma.bot.findUnique({ where: { widgetKey } });
   }
 
-  private buildPrompt(message: string, products: Product[]): string {
-    if (products.length === 0) {
-      return `${message}\n\n(No matching products were found in the knowledge base — say so rather than inventing one.)`;
-    }
-    const catalog = products
-      .map((product, i) => {
-        const price =
-          product.price !== undefined ? ` — ${product.price} ${product.currency ?? ""}`.trimEnd() : "";
-        const description = product.description ? `\n   ${product.description}` : "";
-        return `${i + 1}. ${product.title}${price}${description}`;
-      })
-      .join("\n");
-    return `Relevant products:\n${catalog}\n\nCustomer question: ${message}`;
-  }
 
-  /** Calls knowledge-service directly (internal HTTP, per docs/ARCHITECTURE.md), forwarding the
-   * same business-scoped token the incoming chat request carried — no separate service auth needed. */
-  private async searchKnowledge(
-    knowledgeBaseIds: string[],
-    query: string,
-    authorization: string | undefined,
-  ): Promise<Product[]> {
-    if (knowledgeBaseIds.length === 0) return [];
-    try {
-      const response = await axios.post(
-        `${config.knowledgeServiceUrl}/businesses/current/knowledge-bases/search`,
-        { query, knowledgeBaseIds },
-        { headers: authorization ? { Authorization: authorization } : undefined },
-      );
-      return response.data as Product[];
-    } catch {
-      return [];
-    }
-  }
 
   private async require(businessId: string, id: string): Promise<BotRow> {
     const bot = await prisma.bot.findUnique({ where: { id } });
