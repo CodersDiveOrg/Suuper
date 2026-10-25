@@ -310,7 +310,7 @@ export interface AppSuggestion {
   templateKey: string;
   name: string;
   answers: Record<string, string>;
-  generatedBy: "claude" | "local" | "fallback";
+  generatedBy: "claude" | "cloud" | "local" | "fallback";
 }
 
 // --- Public forms (no login) -------------------------------------------------------

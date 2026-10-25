@@ -3,8 +3,9 @@ import { guardedHttpAgent, guardedHttpsAgent, isBlockedLiteralHost, assertPublic
 import { loadServiceConfig } from "@platform/shared-config";
 import { signBusinessToken } from "@platform/shared-auth";
 import type { WorkflowStep } from "@platform/shared-types";
-import { findModel, integrationCredentials, requireAnthropicKey } from "../../agents/runtime/models";
-import { AnthropicProvider } from "../../agents/runtime/providers/anthropic";
+import { prisma } from "@platform/database";
+import { findModel, integrationCredentials } from "../../agents/runtime/models";
+import { createProvider } from "../../agents/runtime/providers";
 import { buildToolSet } from "../../agents/runtime/toolset";
 import { runStatelessLoop } from "../../agents/runtime/stateless-loop";
 import { INTEGRATION_ACTIONS } from "../../agents/runtime/integrations/actions";
@@ -13,7 +14,7 @@ import { ActionError } from "../../agents/runtime/integrations/http";
 import { buildKnowledgePrompt, searchKnowledge } from "../../agents/runtime/knowledge";
 import { fill, lookup, type TemplateContext } from "./template";
 import { meteredChat } from "../../usage/meter";
-import { assertWithinQuota, QuotaExceededException } from "../../usage/quota";
+import { assertWithinQuota, creditMetersFor, QuotaExceededException } from "../../usage/quota";
 
 const config = loadServiceConfig("bot-service", 3002);
 
@@ -52,11 +53,13 @@ export async function runStep(step: WorkflowStep, ctx: StepContext): Promise<Ste
 
 async function runAi(step: Extract<WorkflowStep, { type: "ai" }>, ctx: StepContext): Promise<StepOutcome> {
   const prompt = fill(step.prompt, ctx);
-  const modelId = step.model || DEFAULT_AI_MODEL;
+  // No model on the step: the business default from Settings → AI Models, else the local model.
+  const business = step.model ? null : await prisma.business.findUnique({ where: { id: ctx.businessId }, select: { defaultModel: true } });
+  const modelId = step.model || business?.defaultModel || DEFAULT_AI_MODEL;
   const model = findModel(modelId);
   if (!model) throw new StepError(`Unknown model "${modelId}"`);
   try {
-    await assertWithinQuota(ctx.businessId, ["ai_tokens"]);
+    await assertWithinQuota(ctx.businessId, await creditMetersFor(ctx.businessId, modelId));
   } catch (err) {
     if (err instanceof QuotaExceededException) throw new StepError(err.message);
     throw err;
@@ -76,11 +79,11 @@ async function runAi(step: Extract<WorkflowStep, { type: "ai" }>, ctx: StepConte
   const system = "You are a step in a business automation. Do exactly what the task asks and reply with only the result, without preamble.";
 
   let text: string;
-  if (model.provider === "anthropic") {
-    const provider = new AnthropicProvider(await requireAnthropicKey(ctx.businessId), model);
+  if (model.provider !== "ollama") {
+    const provider = await createProvider(ctx.businessId, model);
     const toolSet = await buildToolSet({
       businessId: ctx.businessId,
-      provider: "anthropic",
+      provider: model.provider,
       builtInTools: [],
       knowledgeBaseIds: [],
       mcpServerIds: [],

@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus } from "@nestjs/common";
 import { knowledgeStorageBytes, memberSeats, prisma } from "@platform/database";
 import { monthBounds, planFor, quotaExceededBody, type PlanDefinition, type UsageMeterKey } from "@platform/shared-types";
+import { findModel, providerKey } from "../agents/runtime/models";
 
 /** 402 with a message people can act on; `code` lets clients tell it apart from other errors. */
 export class QuotaExceededException extends HttpException {
@@ -23,12 +24,13 @@ export async function usageOf(businessId: string, meter: UsageMeterKey, period =
   switch (meter) {
     case "ai_replies":
       return prisma.usageEvent.count({ where: { businessId, type: "bot_reply", createdAt: inPeriod } });
-    case "ai_tokens": {
+    case "ai_credits": {
+      // Own-key and local-model calls are recorded with 0 credits.
       const sum = await prisma.usageEvent.aggregate({
         where: { businessId, type: "ai_call", createdAt: inPeriod },
-        _sum: { inputTokens: true, outputTokens: true },
+        _sum: { credits: true },
       });
-      return (sum._sum.inputTokens ?? 0) + (sum._sum.outputTokens ?? 0);
+      return sum._sum.credits ?? 0;
     }
     case "agent_runs":
       return prisma.agentRun.count({ where: { businessId, startedAt: inPeriod } });
@@ -58,4 +60,16 @@ export async function assertWithinQuota(businessId: string, meters: UsageMeterKe
     const limit = plan.limits[meter];
     if (options.alreadyCounted ? used > limit : used >= limit) throw new QuotaExceededException(meter, plan);
   }
+}
+
+/**
+ * ["ai_credits"] when a call to this model would spend the plan's credits
+ * (Suuper's key), [] when it's free (a local model, or the business's own key),
+ * so free models keep working after the credits run out.
+ */
+export async function creditMetersFor(businessId: string, modelId: string | undefined): Promise<UsageMeterKey[]> {
+  const model = modelId ? findModel(modelId) : undefined;
+  if (!model || model.provider === "ollama") return [];
+  const key = await providerKey(businessId, model.provider);
+  return key && !key.ownKey ? ["ai_credits"] : [];
 }

@@ -79,6 +79,10 @@ const RESOURCES: Record<string, ResourceDef> = {
   integrations: { type: "integration", lookup: async (provider) => provider },
   channels: { type: "channel", lookup: async (provider) => provider },
   usage: { type: "plan", noIds: true },
+  billing: { type: "billing", noIds: true },
+  // Settings → AI Models: ai-models/providers/:provider and ai-models/default.
+  "ai-models": { type: "ai_models", noIds: true },
+  providers: { type: "ai_provider", lookup: async (provider) => provider },
   // The bots inbox (businesses/current/conversations). Conversations have no name.
   conversations: { type: "conversation" },
 };
@@ -105,6 +109,11 @@ const SUB_ACTIONS: Record<string, string> = {
   samples: "sample_data_removed",
   plan: "changed",
   reply: "replied",
+  checkout: "checkout_started",
+  portal: "portal_opened",
+  cancel: "subscription_cancelled",
+  resume: "subscription_resumed",
+  default: "default_model_changed",
   takeover: "takeover_changed",
 };
 
@@ -157,11 +166,11 @@ export function describeRequest(method: string, url: string): AuditTarget | null
   if (sub) {
     verb = SUB_ACTIONS[sub] ?? sub.replace(/[^a-z0-9]+/gi, "_");
   } else if (method === "DELETE") {
-    verb = { member: "removed", invitation: "revoked", integration: "disconnected", channel: "removed", api_key: "revoked" }[type] ?? "deleted";
+    verb = { member: "removed", invitation: "revoked", integration: "disconnected", channel: "removed", api_key: "revoked", ai_provider: "key_removed" }[type] ?? "deleted";
   } else if (method === "POST" && !id) {
     verb = type === "invitation" ? "sent" : "created";
   } else {
-    verb = { integration: "connected", channel: "saved" }[type] ?? "updated";
+    verb = { integration: "connected", channel: "saved", ai_provider: "key_saved" }[type] ?? "updated";
   }
   return { resourceType: type, resourceId: id, action: `${type}.${verb}`, lookup: id ? resource.lookup : undefined };
 }

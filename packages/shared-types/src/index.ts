@@ -10,3 +10,5 @@ export * from "./app";
 export * from "./webhook";
 export * from "./plans";
 export * from "./conversation";
+export * from "./billing";
+export * from "./ai-models";

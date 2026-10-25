@@ -27,6 +27,8 @@ model Business {
   onboardingDismissedAt  DateTime?
   // Plan key from PLANS (shared-types/plans.ts); sets the usage limits.
   plan                   String                  @default("starter")
+  // Model new bots, agents, app AI and workflow steps start with (Settings → AI Models).
+  defaultModel           String?
   memberships            Membership[]
   roles                  Role[]
   integrationConnections IntegrationConnection[]
@@ -46,6 +48,7 @@ model Business {
   auditEvents            AuditEvent[]
   botChannels            BotChannel[]
   apiKeys                ApiKey[]
+  billingAccount         BillingAccount?
 }
 
 // A user is a single global account. The same user can belong to many
@@ -712,9 +715,14 @@ model UsageEvent {
   // bot | agent | workflow | app
   feature      String
   model        String?
-  provider     String? // anthropic | ollama
+  provider     String? // anthropic | openai | gemini | ollama
   inputTokens  Int      @default(0)
   outputTokens Int      @default(0)
+  // Made with the business's own provider key (Settings → AI Models): it pays the
+  // provider directly, so these tokens don't count toward the plan's AI tokens.
+  ownKey       Boolean  @default(false)
+  // AI credits this call used (1 credit = $0.01 of provider list price); 0 on own keys and local models.
+  credits      Float    @default(0)
   createdAt    DateTime @default(now())
 
   @@index([businessId, createdAt])
@@ -814,4 +822,25 @@ model ApiKey {
   createdAt       DateTime  @default(now())
 
   @@index([businessId])
+}
+
+// A business's Stripe customer and subscription, kept in sync by the Stripe
+// webhook (bot-service billing/). Business.plan stays the source of truth for
+// limits; the webhook sets it from the subscription's price.
+model BillingAccount {
+  id                   String    @id @default(uuid())
+  businessId           String    @unique
+  business             Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  stripeCustomerId     String    @unique
+  stripeSubscriptionId String?   @unique
+  // Stripe subscription status: trialing | active | past_due | unpaid | canceled | incomplete…
+  status               String?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean   @default(false)
+  // Card on file, for display only ("visa", "4242").
+  cardBrand            String?
+  cardLast4            String?
+  billingEmail         String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @default(now()) @updatedAt
 }

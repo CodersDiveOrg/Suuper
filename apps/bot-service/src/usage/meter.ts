@@ -2,7 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { Logger } from "@nestjs/common";
 import { prisma } from "@platform/database";
 import { chatWithUsage, type ChatOptions, type ChatTurn } from "@platform/shared-ai";
-import type { UsageFeature } from "@platform/shared-types";
+import { creditsForCost, type UsageFeature } from "@platform/shared-types";
+import { estimateCostUsd } from "../agents/runtime/models";
 
 // Every model call in bot-service is recorded as a UsageEvent. Callers mark
 // the business and feature once with withUsage(); providers and meteredChat
@@ -21,8 +22,20 @@ export function withUsage<T>(businessId: string, feature: UsageFeature, fn: () =
   return context.run({ businessId, feature }, fn);
 }
 
-/** One model call. Best-effort: a failed write is logged, never thrown into the chat or run. */
-export function recordAiCall(model: string, provider: "anthropic" | "ollama", usage: { inputTokens: number; outputTokens: number }) {
+/**
+ * One model call. Best-effort: a failed write is logged, never thrown into the chat or run.
+ * `ownKey`: made with the business's own provider key, so it uses no AI credits.
+ * `costUsd`: the provider's cost when the caller knows better than list price × tokens (e.g. cache discounts).
+ */
+export function recordAiCall(
+  model: string,
+  provider: "anthropic" | "openai" | "gemini" | "ollama",
+  usage: { inputTokens: number; outputTokens: number },
+  ownKey = false,
+  costUsd?: number,
+) {
+  const credits =
+    ownKey || provider === "ollama" ? 0 : creditsForCost(costUsd ?? estimateCostUsd(model, usage.inputTokens, usage.outputTokens));
   const ctx = context.getStore();
   if (!ctx) {
     logger.warn(`Unmetered ${provider} call to ${model}: no withUsage() around it`);
@@ -38,6 +51,8 @@ export function recordAiCall(model: string, provider: "anthropic" | "ollama", us
         provider,
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
+        ownKey,
+        credits,
       },
     })
     .catch((err) => logger.warn(`Couldn't record usage for ${ctx.businessId}: ${(err as Error).message}`));

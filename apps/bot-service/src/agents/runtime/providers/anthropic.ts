@@ -38,6 +38,7 @@ export class AnthropicProvider implements ModelProvider {
   constructor(
     apiKey: string,
     private readonly model: AgentModel,
+    private readonly ownKey = false,
   ) {
     this.client = new Anthropic({ apiKey });
   }
@@ -82,7 +83,15 @@ export class AnthropicProvider implements ModelProvider {
           (message.usage.cache_creation_input_tokens ?? 0),
         outputTokens: message.usage.output_tokens,
       };
-      recordAiCall(request.model, "anthropic", usage);
+      // Cache reads bill at 10% of the input price and cache writes at 125%, so cost them as such.
+      const price = this.model.pricing;
+      const costUsd =
+        (message.usage.input_tokens * price.input +
+          (message.usage.cache_read_input_tokens ?? 0) * price.input * 0.1 +
+          (message.usage.cache_creation_input_tokens ?? 0) * price.input * 1.25 +
+          message.usage.output_tokens * price.output) /
+        1_000_000;
+      recordAiCall(request.model, "anthropic", usage, this.ownKey, costUsd);
       return { content: sanitizeFallbackContent(message.content), stopReason: message.stop_reason ?? "end_turn", usage };
     }
   }

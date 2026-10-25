@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { prisma } from "@platform/database";
 import type { ChatTurn } from "@platform/shared-ai";
-import { AGENT_MODELS, anthropicApiKey, findModel } from "./runtime/models";
+import { AGENT_MODELS, defaultModelFor, findModel, modelAvailability } from "./runtime/models";
 import { isToolKey, toolCatalog } from "./runtime/tools";
 import { validMcpServerIds } from "./runtime/mcp-ids";
 import { validIntegrations } from "./runtime/integration-ids";
@@ -9,7 +9,7 @@ import { integrationToolCatalog } from "./runtime/integrations";
 import { buildKnowledgePrompt, searchKnowledge } from "./runtime/knowledge";
 import { AGENT_TEMPLATES } from "./templates";
 import { meteredChat, withUsage } from "../usage/meter";
-import { assertWithinQuota } from "../usage/quota";
+import { assertWithinQuota, creditMetersFor } from "../usage/quota";
 
 
 export interface AgentRow {
@@ -44,16 +44,6 @@ export interface AgentInput {
 
 const MAX_STEPS_LIMIT = 20;
 
-let ollamaCheck: { at: number; ok: boolean } | null = null;
-async function ollamaReachable() {
-  if (ollamaCheck && Date.now() - ollamaCheck.at < 60_000) return ollamaCheck.ok;
-  const ok = await fetch(`${process.env.OLLAMA_URL ?? "http://localhost:11434"}/api/tags`, { signal: AbortSignal.timeout(1500) })
-    .then((r) => r.ok)
-    .catch(() => false);
-  ollamaCheck = { at: Date.now(), ok };
-  return ok;
-}
-
 @Injectable()
 export class AgentsService {
   async create(businessId: string, input: AgentInput) {
@@ -82,20 +72,7 @@ export class AgentsService {
 
   /** Models an agent can use, and whether each is usable right now for this business. */
   async models(businessId: string) {
-    const [hasKey, ollamaUp] = await Promise.all([anthropicApiKey(businessId).then(Boolean), ollamaReachable()]);
-    return AGENT_MODELS.map((m) => ({
-      id: m.id,
-      label: m.label,
-      provider: m.provider,
-      description: m.description,
-      available: m.provider === "anthropic" ? hasKey : ollamaUp,
-      unavailableReason:
-        m.provider === "anthropic" && !hasKey
-          ? "Connect the Anthropic integration to use Claude models."
-          : m.provider === "ollama" && !ollamaUp
-            ? "The local Ollama server isn't reachable."
-            : undefined,
-    }));
+    return modelAvailability(businessId);
   }
 
   tools() {
@@ -106,9 +83,9 @@ export class AgentsService {
     return integrationToolCatalog(businessId);
   }
 
-  /** Claude when a key is configured, otherwise the local model, so new agents work out of the box. */
+  /** The business default (Settings → AI Models), else a capable cloud model it has a key for, else the local model. */
   private async defaultModel(businessId: string) {
-    return (await anthropicApiKey(businessId)) ? "claude-opus-5-5" : "llama3.2:3b";
+    return (await defaultModelFor(businessId, "capable"))?.id ?? "llama3.2:3b";
   }
 
   private validModel(model: unknown) {
@@ -197,7 +174,7 @@ export class AgentsService {
   async sendMessage(businessId: string, id: string, message: string, authorization: string | undefined) {
     if (!message.trim()) throw new BadRequestException("message is required");
     const agent = await this.require(businessId, id);
-    await assertWithinQuota(businessId, ["ai_tokens"]);
+    await assertWithinQuota(businessId, await creditMetersFor(businessId, agent.model));
     const knowledge = await searchKnowledge(agent.knowledgeBaseIds, message, authorization);
 
     const messages: ChatTurn[] = [

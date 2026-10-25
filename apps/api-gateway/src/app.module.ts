@@ -12,6 +12,7 @@ import {
   ChannelWebhookProxyController,
   ConversationsProxyController,
 } from "./proxy/channel-proxy.controller";
+import { AiModelsProxyController, BillingProxyController, BillingWebhookProxyController } from "./proxy/billing-proxy.controller";
 import {
   AgentMessagesStreamProxyController,
   AgentRunsProxyController,
@@ -39,6 +40,8 @@ import { AppsProxyController, PublicAppsProxyController } from "./proxy/app-prox
     BotsProxyController,
     ChannelsProxyController,
     ConversationsProxyController,
+    BillingProxyController,
+    AiModelsProxyController,
     AgentMessagesStreamProxyController,
     AgentRunsProxyController,
     AgentSkillsProxyController,
@@ -51,6 +54,7 @@ import { AppsProxyController, PublicAppsProxyController } from "./proxy/app-prox
     WorkflowsProxyController,
     WorkflowWebhookProxyController,
     ChannelWebhookProxyController,
+    BillingWebhookProxyController,
     AppsProxyController,
     PublicAppsProxyController,
     McpServersProxyController,

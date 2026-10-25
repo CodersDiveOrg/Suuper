@@ -71,7 +71,7 @@ const searchKnowledge: ToolSpec<{ query: string }> = {
   label: "Search knowledge bases",
   description: "Look things up in the knowledge bases attached to this agent.",
   kind: "client",
-  providers: ["anthropic", "ollama"],
+  providers: ["anthropic", "openai", "gemini", "ollama"],
   requires: "At least one knowledge base attached to the agent",
   definition: {
     name: "search_knowledge",
@@ -122,7 +122,7 @@ const sendEmail: ToolSpec<{ to: string; subject: string; body: string }> = {
   label: "Send email",
   description: `Send plain-text emails through the business's Email (SMTP) integration. Max ${MAX_EMAILS_PER_RUN} per run.`,
   kind: "client",
-  providers: ["anthropic", "ollama"],
+  providers: ["anthropic", "openai", "gemini", "ollama"],
   requires: "The Email (SMTP) integration connected",
   definition: {
     name: "send_email",
@@ -171,7 +171,7 @@ const httpRequest: ToolSpec<{ url: string; method: "GET" | "POST"; body?: string
   label: "HTTP request",
   description: "Call public web APIs (GET/POST). Internal and private network addresses are blocked.",
   kind: "client",
-  providers: ["anthropic", "ollama"],
+  providers: ["anthropic", "openai", "gemini", "ollama"],
   definition: {
     name: "http_request",
     description:
@@ -249,7 +249,7 @@ const currentTime: ToolSpec<{ timezone?: string }> = {
   label: "Current date & time",
   description: "Lets the agent know today's date and time.",
   kind: "client",
-  providers: ["anthropic", "ollama"],
+  providers: ["anthropic", "openai", "gemini", "ollama"],
   definition: {
     name: "current_time",
     description: "Get the current date and time, optionally in an IANA timezone like Europe/London.",

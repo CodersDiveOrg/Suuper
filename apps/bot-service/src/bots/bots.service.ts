@@ -11,8 +11,8 @@ import {
   type WidgetOverview,
   type WidgetSettings,
 } from "@platform/shared-types";
-import { AGENT_MODELS, findModel, requireAnthropicKey } from "../agents/runtime/models";
-import { AnthropicProvider } from "../agents/runtime/providers/anthropic";
+import { AGENT_MODELS, findModel } from "../agents/runtime/models";
+import { createProvider } from "../agents/runtime/providers";
 import { OllamaProvider } from "../agents/runtime/providers/ollama";
 import { buildToolSet } from "../agents/runtime/toolset";
 import { runStatelessLoop } from "../agents/runtime/stateless-loop";
@@ -20,7 +20,7 @@ import { validMcpServerIds } from "../agents/runtime/mcp-ids";
 import { validIntegrations } from "../agents/runtime/integration-ids";
 import { buildKnowledgePrompt, searchKnowledge } from "../agents/runtime/knowledge";
 import { meteredChat, recordBotReply, withUsage } from "../usage/meter";
-import { assertWithinQuota } from "../usage/quota";
+import { assertWithinQuota, creditMetersFor } from "../usage/quota";
 import { logBotExchange, replyOutcome, type BotChatMeta, type BotReplyOutcome } from "./chat-log";
 
 // Bots answer in one request (and from the public widget), so keep tool loops short.
@@ -142,7 +142,8 @@ export class BotsService {
         mcpServerIds: await validMcpServerIds(businessId, mcpServerIds ?? []),
         integrations: validIntegrations(integrations ?? []),
         knowledgeBaseIds,
-        ...(model !== undefined ? { model: this.validModel(model) } : {}),
+        // No model given: the business default from Settings → AI Models, if one is set.
+        ...(model !== undefined ? { model: this.validModel(model) } : await this.businessDefaultModel(businessId)),
       },
     });
     return this.serialize(bot);
@@ -226,7 +227,7 @@ export class BotsService {
     message: string,
     answer: () => Promise<T>,
   ): Promise<T> {
-    await assertWithinQuota(bot.businessId, ["ai_replies", "ai_tokens"]);
+    await assertWithinQuota(bot.businessId, ["ai_replies", ...(await creditMetersFor(bot.businessId, bot.model))]);
     const started = Date.now();
     const record = (reply: string, outcome: BotReplyOutcome) =>
       logBotExchange({ businessId: bot.businessId, botId: bot.id, meta, question: message, reply, outcome, durationMs: Date.now() - started });
@@ -244,8 +245,8 @@ export class BotsService {
 
   private async sendMessageForBot(bot: BotRow, message: string, knowledge: KnowledgeSearchResult, history: ChatHistoryTurn[] = []) {
     const prompt = buildKnowledgePrompt(message, knowledge, "Customer question");
-    // Tools, or a Claude model, go through the provider layer; plain local bots keep the simple path.
-    if (bot.mcpServerIds.length > 0 || bot.integrations.length > 0 || findModel(bot.model)?.provider === "anthropic") {
+    // Tools, or a cloud model, go through the provider layer; plain local bots keep the simple path.
+    if (bot.mcpServerIds.length > 0 || bot.integrations.length > 0 || (findModel(bot.model)?.provider ?? "ollama") !== "ollama") {
       const result = await this.sendWithTools(bot, withHistory(prompt, history), knowledge);
       return { ...result, reply: cleanReply(result.reply) };
     }
@@ -259,6 +260,11 @@ export class BotsService {
     return { reply, ...knowledge };
   }
 
+  private async businessDefaultModel(businessId: string): Promise<{ model?: string }> {
+    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { defaultModel: true } });
+    return business?.defaultModel && findModel(business.defaultModel) ? { model: business.defaultModel } : {};
+  }
+
   private validModel(model: unknown) {
     if (typeof model !== "string" || !findModel(model)) {
       throw new BadRequestException(`model must be one of: ${AGENT_MODELS.map((m) => m.id).join(", ")}`);
@@ -270,10 +276,7 @@ export class BotsService {
   private async sendWithTools(bot: BotRow, userContent: string, knowledge: KnowledgeSearchResult) {
     const model = findModel(bot.model);
     const providerName = model?.provider ?? "ollama";
-    const provider =
-      model?.provider === "anthropic"
-        ? new AnthropicProvider(await requireAnthropicKey(bot.businessId), model)
-        : new OllamaProvider();
+    const provider = model ? await createProvider(bot.businessId, model) : new OllamaProvider();
     const toolSet = await buildToolSet({
       businessId: bot.businessId,
       provider: providerName,

@@ -8,8 +8,8 @@ import {
   type UsageFeature,
   type UsageSummary,
 } from "@platform/shared-types";
-import { estimateCostUsd } from "../agents/runtime/models";
 import { planOf, usageOf } from "./quota";
+import { billingConfigured } from "../billing/stripe";
 
 const FEATURES: UsageFeature[] = ["bot", "agent", "workflow", "app"];
 // How far back the month picker goes.
@@ -19,6 +19,7 @@ interface DayRow {
   day: Date;
   feature: string;
   tokens: bigint;
+  credits: number | null;
   replies: bigint;
 }
 
@@ -28,8 +29,9 @@ export class UsageService {
     return { plans: PLANS, meters: USAGE_METERS };
   }
 
-  /** Changing the plan takes effect immediately (no billing is attached yet). */
+  /** Changing the plan takes effect immediately. Only without Stripe: with it, plans change through Billing. */
   async setPlan(businessId: string, plan: unknown) {
+    if (billingConfigured()) throw new BadRequestException("Plans are changed under Settings → Billing");
     if (!isPlanKey(plan)) throw new BadRequestException(`plan must be one of: ${PLANS.map((p) => p.key).join(", ")}`);
     await prisma.business.update({ where: { id: businessId }, data: { plan } });
     return this.summary(businessId);
@@ -50,6 +52,7 @@ export class UsageService {
       prisma.$queryRaw<DayRow[]>`
         SELECT date_trunc('day', "createdAt") AS day, feature,
           SUM("inputTokens" + "outputTokens") FILTER (WHERE type = 'ai_call') AS tokens,
+          SUM(credits) FILTER (WHERE type = 'ai_call') AS credits,
           COUNT(*) FILTER (WHERE type = 'bot_reply') AS replies
         FROM "UsageEvent"
         WHERE "businessId" = ${businessId} AND "createdAt" >= ${period.start} AND "createdAt" < ${period.end}
@@ -69,13 +72,13 @@ export class UsageService {
         by: ["feature"],
         where: { businessId, type: "ai_call", createdAt: inPeriod },
         _count: { _all: true },
-        _sum: { inputTokens: true, outputTokens: true },
+        _sum: { inputTokens: true, outputTokens: true, credits: true },
       }),
       prisma.usageEvent.groupBy({
-        by: ["model", "provider"],
+        by: ["model", "provider", "ownKey"],
         where: { businessId, type: "ai_call", createdAt: inPeriod },
         _count: { _all: true },
-        _sum: { inputTokens: true, outputTokens: true },
+        _sum: { inputTokens: true, outputTokens: true, credits: true },
       }),
     ]);
 
@@ -83,13 +86,16 @@ export class UsageService {
     const last = current ? new Date() : new Date(period.end.getTime() - 1);
     const daily: UsageSummary["daily"] = [];
     for (let d = new Date(period.start); d <= last; d = new Date(d.getTime() + 86_400_000)) {
-      daily.push({ date: d.toISOString().slice(0, 10), tokens: { bot: 0, agent: 0, workflow: 0, app: 0 }, replies: 0, agentRuns: 0, workflowRuns: 0 });
+      daily.push({ date: d.toISOString().slice(0, 10), tokens: { bot: 0, agent: 0, workflow: 0, app: 0 }, credits: { bot: 0, agent: 0, workflow: 0, app: 0 }, replies: 0, agentRuns: 0, workflowRuns: 0 });
     }
     const dayOf = (date: Date) => daily.find((x) => x.date === date.toISOString().slice(0, 10));
     for (const row of days) {
       const day = dayOf(row.day);
       if (!day) continue;
-      if (FEATURES.includes(row.feature as UsageFeature)) day.tokens[row.feature as UsageFeature] += Number(row.tokens ?? 0);
+      if (FEATURES.includes(row.feature as UsageFeature)) {
+        day.tokens[row.feature as UsageFeature] += Number(row.tokens ?? 0);
+        day.credits[row.feature as UsageFeature] += Number(row.credits ?? 0);
+      }
       day.replies += Number(row.replies ?? 0);
     }
     for (const row of agentDays) {
@@ -108,16 +114,15 @@ export class UsageService {
         return {
           model: m.model ?? "unknown",
           provider: m.provider ?? "unknown",
+          ownKey: m.ownKey,
           calls: m._count._all,
           inputTokens,
           outputTokens,
-          costUsd: estimateCostUsd(m.model ?? "", inputTokens, outputTokens),
+          credits: m._sum.credits ?? 0,
         };
       })
       .sort((a, b) => b.inputTokens + b.outputTokens - (a.inputTokens + a.outputTokens));
 
-    // A feature's cost is the sum over the models it used.
-    const featureCost = await this.costByFeature(businessId, inPeriod);
     const byFeature = FEATURES.map((feature) => {
       const row = features.find((f) => f.feature === feature);
       return {
@@ -125,7 +130,7 @@ export class UsageService {
         calls: row?._count._all ?? 0,
         inputTokens: row?._sum.inputTokens ?? 0,
         outputTokens: row?._sum.outputTokens ?? 0,
-        costUsd: featureCost.get(feature) ?? 0,
+        credits: row?._sum.credits ?? 0,
       };
     });
 
@@ -138,19 +143,6 @@ export class UsageService {
       byFeature,
       byModel,
     };
-  }
-
-  private async costByFeature(businessId: string, createdAt: { gte: Date; lt: Date }) {
-    const rows = await prisma.usageEvent.groupBy({
-      by: ["feature", "model"],
-      where: { businessId, type: "ai_call", createdAt },
-      _sum: { inputTokens: true, outputTokens: true },
-    });
-    const cost = new Map<string, number>();
-    for (const r of rows) {
-      cost.set(r.feature, (cost.get(r.feature) ?? 0) + estimateCostUsd(r.model ?? "", r._sum.inputTokens ?? 0, r._sum.outputTokens ?? 0));
-    }
-    return cost;
   }
 
   private period(month?: string) {

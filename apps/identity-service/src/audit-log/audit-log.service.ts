@@ -36,6 +36,9 @@ const RESOURCE_LABELS: Record<string, string> = {
   plan: "plan",
   workspace: "workspace settings",
   conversation: "conversation",
+  billing: "billing",
+  ai_models: "AI models",
+  ai_provider: "AI provider",
 };
 
 // "<Verb> <resource> “name”". Verbs that read better with "of"/"for" carry it.
@@ -66,6 +69,8 @@ const VERBS: Record<string, string> = {
 type EventRow = Prisma.AuditEventGetPayload<object>;
 type Details = { changed?: string[]; values?: Record<string, unknown> } | null;
 
+const PROVIDER_NAMES: Record<string, string> = { openai: "OpenAI", gemini: "Gemini", anthropic: "Anthropic" };
+
 const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** One sentence for the log, e.g. "Changed Sara's role to admin". */
@@ -88,6 +93,21 @@ export function summarize(event: Pick<EventRow, "action" | "resourceType" | "res
     case "member.updated":
       if (typeof values.role === "string") return `Changed ${event.resourceName ?? "a member"}'s role to ${values.role}`;
       break;
+    case "ai_provider.key_saved":
+    case "ai_provider.key_removed": {
+      const provider = event.resourceName ? (PROVIDER_NAMES[event.resourceName] ?? capitalize(event.resourceName)) : "an AI provider";
+      return `${verb === "key_saved" ? "Saved" : "Removed"} the ${provider} API key`;
+    }
+    case "ai_models.default_model_changed":
+      return typeof values.model === "string" ? `Changed the default AI model to ${values.model}` : "Changed the default AI model";
+    case "billing.checkout_started":
+      return "Started a plan change";
+    case "billing.portal_opened":
+      return "Opened the billing portal";
+    case "billing.subscription_cancelled":
+      return "Cancelled the subscription";
+    case "billing.subscription_resumed":
+      return "Resumed the subscription";
     case "conversation.replied":
       return "Replied to a conversation";
     case "conversation.takeover_changed":

@@ -2,14 +2,13 @@ import { BadRequestException, ConflictException, Injectable, Logger } from "@nes
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma, Prisma } from "@platform/database";
 import { emitWebhookEvent } from "../../webhooks/delivery";
-import { estimateCostUsd, findModel, requireAnthropicKey } from "./models";
-import { AnthropicProvider } from "./providers/anthropic";
-import { OllamaProvider } from "./providers/ollama";
+import { estimateCostUsd, findModel } from "./models";
+import { createProvider } from "./providers";
 import type { ContentBlockParam, MessageParam, ModelProvider } from "./providers/types";
 import { loadSkills, withSkills } from "./skills";
 import { buildToolSet } from "./toolset";
 import { withUsage } from "../../usage/meter";
-import { assertWithinQuota } from "../../usage/quota";
+import { assertWithinQuota, creditMetersFor } from "../../usage/quota";
 
 type AgentRunRow = Prisma.AgentRunGetPayload<object>;
 
@@ -89,7 +88,7 @@ export class AgentRunner {
    * so a dropped client connection doesn't lose work.
    */
   async run(params: RunParams) {
-    await assertWithinQuota(params.agent.businessId, ["agent_runs", "ai_tokens"]);
+    await assertWithinQuota(params.agent.businessId, ["agent_runs", ...(await creditMetersFor(params.agent.businessId, params.agent.model))]);
     return withUsage(params.agent.businessId, "agent", () => this.execute(params));
   }
 
@@ -101,10 +100,7 @@ export class AgentRunner {
 
     const model = findModel(agent.model);
     if (!model) throw new BadRequestException(`Unknown model "${agent.model}". Edit the agent and pick a model.`);
-    const provider: ModelProvider =
-      model.provider === "anthropic"
-        ? new AnthropicProvider(await requireAnthropicKey(agent.businessId), model)
-        : new OllamaProvider();
+    const provider: ModelProvider = await createProvider(agent.businessId, model);
 
     const active = await prisma.agentRun.findFirst({
       where: { conversationId, status: "running", startedAt: { gt: new Date(Date.now() - STALE_RUN_MS) } },

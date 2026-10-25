@@ -7,7 +7,7 @@ export type PlanKey = "starter" | "growth" | "pro";
 
 export type UsageMeterKey =
   | "ai_replies"
-  | "ai_tokens"
+  | "ai_credits"
   | "agent_runs"
   | "workflow_runs"
   | "bots"
@@ -23,12 +23,12 @@ export interface UsageMeterDefinition {
   description: string;
   /** "month": resets on the 1st (UTC). "total": what exists now. */
   period: "month" | "total";
-  unit: "count" | "tokens" | "bytes";
+  unit: "count" | "credits" | "bytes";
 }
 
 export const USAGE_METERS: UsageMeterDefinition[] = [
   { key: "ai_replies", label: "Bot replies", noun: "bot replies", description: "Answers your bots send, on your website, in the playground and on other channels.", period: "month", unit: "count" },
-  { key: "ai_tokens", label: "AI tokens", noun: "AI tokens", description: "Text read and written by AI across bots, agents, workflows and apps.", period: "month", unit: "tokens" },
+  { key: "ai_credits", label: "AI credits", noun: "AI credits", description: "AI work across bots, agents, workflows and apps. Bigger models use more credits; local models and your own provider keys use none.", period: "month", unit: "credits" },
   { key: "agent_runs", label: "Agent runs", noun: "agent runs", description: "Requests agents work on, from chat and schedules.", period: "month", unit: "count" },
   { key: "workflow_runs", label: "Workflow runs", noun: "workflow runs", description: "Times a workflow ran, from any trigger.", period: "month", unit: "count" },
   { key: "bots", label: "Bots", noun: "bots", description: "Bots in this workspace.", period: "total", unit: "count" },
@@ -36,6 +36,15 @@ export const USAGE_METERS: UsageMeterDefinition[] = [
   { key: "knowledge_storage", label: "Knowledge storage", noun: "knowledge storage", description: "Documents, website pages, products and their search index.", period: "total", unit: "bytes" },
   { key: "app_records", label: "App records", noun: "app records", description: "Records across all apps, including form submissions.", period: "total", unit: "count" },
 ];
+
+// AI credits: 1 credit = $0.01 of what the model provider charges (list prices,
+// see bot-service models.ts). Plans include a monthly budget; expensive models
+// simply use it faster. Calls on the business's own key or a local model are free.
+export const CREDITS_PER_USD = 100;
+
+export function creditsForCost(costUsd: number): number {
+  return costUsd * CREDITS_PER_USD;
+}
 
 export interface PlanDefinition {
   key: PlanKey;
@@ -55,7 +64,7 @@ export const PLANS: PlanDefinition[] = [
     description: "One location getting started with an AI assistant.",
     limits: {
       ai_replies: 2_000,
-      ai_tokens: 5_000_000,
+      ai_credits: 1_500,
       agent_runs: 300,
       workflow_runs: 2_000,
       bots: 3,
@@ -71,7 +80,7 @@ export const PLANS: PlanDefinition[] = [
     description: "A growing business with steady customer traffic.",
     limits: {
       ai_replies: 10_000,
-      ai_tokens: 25_000_000,
+      ai_credits: 6_000,
       agent_runs: 1_500,
       workflow_runs: 10_000,
       bots: 10,
@@ -87,7 +96,7 @@ export const PLANS: PlanDefinition[] = [
     description: "High volume, several teams or locations.",
     limits: {
       ai_replies: 50_000,
-      ai_tokens: 100_000_000,
+      ai_credits: 15_000,
       agent_runs: 5_000,
       workflow_runs: 50_000,
       bots: 25,
@@ -146,7 +155,16 @@ export interface UsageSummary {
   period: { start: string; end: string; current: boolean };
   meters: UsageMeterValue[];
   /** One entry per UTC day of the period (up to today for the current month). */
-  daily: { date: string; tokens: Record<UsageFeature, number>; replies: number; agentRuns: number; workflowRuns: number }[];
-  byFeature: { feature: UsageFeature; calls: number; inputTokens: number; outputTokens: number; costUsd: number }[];
-  byModel: { model: string; provider: string; calls: number; inputTokens: number; outputTokens: number; costUsd: number }[];
+  daily: {
+    date: string;
+    tokens: Record<UsageFeature, number>;
+    /** AI credits used, by feature. */
+    credits: Record<UsageFeature, number>;
+    replies: number;
+    agentRuns: number;
+    workflowRuns: number;
+  }[];
+  byFeature: { feature: UsageFeature; calls: number; inputTokens: number; outputTokens: number; credits: number }[];
+  /** `ownKey`: ran on the business's own provider key (0 credits). */
+  byModel: { model: string; provider: string; ownKey: boolean; calls: number; inputTokens: number; outputTokens: number; credits: number }[];
 }
