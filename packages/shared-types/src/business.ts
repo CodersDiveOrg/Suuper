@@ -83,6 +83,8 @@ export interface BusinessContext {
   businessId: BusinessId;
   role: BusinessRole;
   permissions: Permission[];
+  /** Set when the request came in with an API key instead of a session token. */
+  apiKeyId?: string;
 }
 
 /** Attached to requests authenticated as a user but not yet scoped to a business. */
@@ -104,13 +106,23 @@ export type Permission =
   | "agents:read"
   | "agents:write"
   | "agents:run"
+  | "workflows:read"
+  | "workflows:write"
+  | "workflows:run"
+  | "apps:read"
+  | "apps:write"
+  | "apps:records"
   | "mcp:read"
   | "mcp:write"
   | "knowledge:read"
   | "knowledge:write"
   | "roles:manage"
   | "integrations:read"
-  | "integrations:write";
+  | "integrations:write"
+  | "webhooks:read"
+  | "webhooks:write"
+  | "audit:read"
+  | "apikeys:manage";
 
 export const ALL_PERMISSIONS: Permission[] = [
   "business:read",
@@ -124,6 +136,12 @@ export const ALL_PERMISSIONS: Permission[] = [
   "agents:read",
   "agents:write",
   "agents:run",
+  "workflows:read",
+  "workflows:write",
+  "workflows:run",
+  "apps:read",
+  "apps:write",
+  "apps:records",
   "mcp:read",
   "mcp:write",
   "knowledge:read",
@@ -131,6 +149,10 @@ export const ALL_PERMISSIONS: Permission[] = [
   "roles:manage",
   "integrations:read",
   "integrations:write",
+  "webhooks:read",
+  "webhooks:write",
+  "audit:read",
+  "apikeys:manage",
 ];
 
 export function isPermission(value: string): value is Permission {
@@ -155,6 +177,12 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "agents:read",
     "agents:write",
     "agents:run",
+    "workflows:read",
+    "workflows:write",
+    "workflows:run",
+    "apps:read",
+    "apps:write",
+    "apps:records",
     "mcp:read",
     "mcp:write",
     "knowledge:read",
@@ -162,6 +190,10 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "roles:manage",
     "integrations:read",
     "integrations:write",
+    "webhooks:read",
+    "webhooks:write",
+    "audit:read",
+    "apikeys:manage",
   ],
   member: [
     "business:read",
@@ -170,6 +202,10 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "bots:run",
     "agents:read",
     "agents:run",
+    "workflows:read",
+    "workflows:run",
+    "apps:read",
+    "apps:records",
     "mcp:read",
     "knowledge:read",
     "integrations:read",
@@ -179,6 +215,8 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "members:read",
     "bots:read",
     "agents:read",
+    "workflows:read",
+    "apps:read",
     "mcp:read",
     "knowledge:read",
     "integrations:read",
@@ -210,4 +248,24 @@ export interface RoleDto {
 
 export function roleHasPermission(role: BusinessRole, permission: Permission): boolean {
   return permissionsForRole(role).includes(permission);
+}
+
+/**
+ * A business API key as listed. The secret itself is only returned once, from
+ * the create call (ApiKeyCreatedDto.key); afterwards only its prefix is known.
+ */
+export interface ApiKeyDto {
+  id: string;
+  name: string;
+  /** First characters of the key, for telling keys apart (e.g. "sk_live_a1b2"). */
+  prefix: string;
+  permissions: Permission[];
+  createdBy: { userId: string; email?: string; name?: string };
+  lastUsedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+}
+
+export interface ApiKeyCreatedDto extends ApiKeyDto {
+  key: string;
 }

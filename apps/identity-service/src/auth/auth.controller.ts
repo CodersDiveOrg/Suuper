@@ -11,6 +11,7 @@ import {
 import { UserContextGuard } from "@platform/shared-auth";
 import type { UserContext } from "@platform/shared-types";
 import { AuthService } from "./auth.service";
+import { requestOrigin } from "@platform/database";
 
 interface RegisterBody {
   email?: string;
@@ -78,9 +79,9 @@ export class AuthController {
   @Post("businesses/:businessId/session")
   @UseGuards(UserContextGuard)
   async createBusinessSession(
-    @Req() request: { userContext: UserContext },
+    @Req() request: { userContext: UserContext; headers: Record<string, string | string[] | undefined>; ip?: string },
     @Param("businessId") businessId: string,
   ) {
-    return this.authService.createBusinessSession(request.userContext.userId, businessId);
+    return this.authService.createBusinessSession(request.userContext.userId, businessId, requestOrigin(request));
   }
 }

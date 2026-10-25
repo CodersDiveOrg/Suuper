@@ -76,6 +76,13 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "phoneNumberId", label: "Phone number ID", type: "text", required: true },
       { key: "businessAccountId", label: "Business account ID", type: "text", required: true },
       { key: "accessToken", label: "Access token", type: "secret", required: true },
+      {
+        key: "appSecret",
+        label: "App secret",
+        type: "secret",
+        required: false,
+        help: "Meta app → Settings → Basic. Used to check that incoming messages really come from WhatsApp.",
+      },
     ],
   },
   {
@@ -141,6 +148,22 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
     description: "Use your own Claude API key for this business's bots and agents.",
     docsUrl: "https://console.anthropic.com/settings/keys",
     fields: [{ key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "sk-ant-…" }],
+  },
+  {
+    key: "openai",
+    name: "OpenAI (GPT)",
+    category: "ai",
+    description: "Use your own OpenAI API key for this business's bots and agents.",
+    docsUrl: "https://platform.openai.com/api-keys",
+    fields: [{ key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "sk-…" }],
+  },
+  {
+    key: "gemini",
+    name: "Google Gemini",
+    category: "ai",
+    description: "Use your own Gemini API key for this business's bots and agents.",
+    docsUrl: "https://aistudio.google.com/apikey",
+    fields: [{ key: "apiKey", label: "API key", type: "secret", required: true, placeholder: "AIza…" }],
   },
   // --- Messaging ---------------------------------------------------------------
   {

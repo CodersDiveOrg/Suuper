@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AgentModel } from "../models";
 import type { ContentBlockParam, ModelProvider, TurnRequest, TurnResult } from "./types";
+import { recordAiCall } from "../../../usage/meter";
 
 const MAX_JSON_RETRIES = 2;
 
@@ -37,6 +38,7 @@ export class AnthropicProvider implements ModelProvider {
   constructor(
     apiKey: string,
     private readonly model: AgentModel,
+    private readonly ownKey = false,
   ) {
     this.client = new Anthropic({ apiKey });
   }
@@ -74,17 +76,23 @@ export class AnthropicProvider implements ModelProvider {
         continue;
       }
 
-      return {
-        content: sanitizeFallbackContent(message.content),
-        stopReason: message.stop_reason ?? "end_turn",
-        usage: {
-          inputTokens:
-            message.usage.input_tokens +
-            (message.usage.cache_read_input_tokens ?? 0) +
-            (message.usage.cache_creation_input_tokens ?? 0),
-          outputTokens: message.usage.output_tokens,
-        },
+      const usage = {
+        inputTokens:
+          message.usage.input_tokens +
+          (message.usage.cache_read_input_tokens ?? 0) +
+          (message.usage.cache_creation_input_tokens ?? 0),
+        outputTokens: message.usage.output_tokens,
       };
+      // Cache reads bill at 10% of the input price and cache writes at 125%, so cost them as such.
+      const price = this.model.pricing;
+      const costUsd =
+        (message.usage.input_tokens * price.input +
+          (message.usage.cache_read_input_tokens ?? 0) * price.input * 0.1 +
+          (message.usage.cache_creation_input_tokens ?? 0) * price.input * 1.25 +
+          message.usage.output_tokens * price.output) /
+        1_000_000;
+      recordAiCall(request.model, "anthropic", usage, this.ownKey, costUsd);
+      return { content: sanitizeFallbackContent(message.content), stopReason: message.stop_reason ?? "end_turn", usage };
     }
   }
 }

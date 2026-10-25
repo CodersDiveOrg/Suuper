@@ -12,6 +12,7 @@ export async function forwardTo(targetServiceUrl: string, req: Request) {
     // Only the public widget route reads this (see WidgetKeyGuard) — harmless
     // to forward for every other, JWT-authenticated proxy too.
     if (req.headers.origin) headers.Origin = req.headers.origin;
+    Object.assign(headers, clientHeaders(req));
 
     const response = await axios.request({
       method: req.method as Method,
@@ -42,6 +43,7 @@ export async function forwardTo(targetServiceUrl: string, req: Request) {
 export async function streamTo(targetServiceUrl: string, req: Request, res: Response) {
   const headers: Record<string, string> = { Accept: req.headers.accept ?? "application/json" };
   if (req.headers.authorization) headers.Authorization = req.headers.authorization;
+  Object.assign(headers, clientHeaders(req));
   // MCP clients (hosted servers at /mcp/:id) negotiate with these.
   for (const name of ["content-type", "mcp-protocol-version", "mcp-session-id", "last-event-id"]) {
     const value = req.headers[name];
@@ -75,4 +77,14 @@ export async function streamTo(targetServiceUrl: string, req: Request, res: Resp
     const error = err as AxiosError;
     res.status(error.response?.status ?? 502).json({ message: "Service unavailable" });
   }
+}
+
+/** Who's calling, for the audit log: the client IP (nginx's X-Forwarded-For when present) and browser. */
+function clientHeaders(req: Request): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const forwarded = req.headers["x-forwarded-for"];
+  const ip = (typeof forwarded === "string" && forwarded) || req.ip;
+  if (ip) headers["X-Forwarded-For"] = ip;
+  if (typeof req.headers["user-agent"] === "string") headers["User-Agent"] = req.headers["user-agent"];
+  return headers;
 }

@@ -49,6 +49,8 @@ export function loadServiceConfig(serviceName: string, defaultPort = 3000) {
     botServiceUrl: required("BOT_SERVICE_URL", "http://localhost:3002"),
     knowledgeServiceUrl: required("KNOWLEDGE_SERVICE_URL", "http://localhost:3004"),
     mcpGatewayUrl: required("MCP_GATEWAY_URL", "http://localhost:3003"),
+    // Public base URL of the web app — links in emails and apps' hosted pages (/a/<slug>).
+    webAppUrl: (process.env.WEB_APP_URL || "http://localhost:3200").replace(/\/+$/, ""),
     // Public base URL of api-gateway — used to show hosted MCP endpoints to users.
     publicApiUrl: (process.env.PUBLIC_API_URL || "http://localhost:3010").replace(/\/+$/, ""),
     // Local development only: let MCP servers / hosted tools reach localhost and

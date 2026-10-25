@@ -1,16 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import axios from "axios";
 import { prisma } from "@platform/database";
-import { chat, type ChatTurn } from "@platform/shared-ai";
-import { loadServiceConfig } from "@platform/shared-config";
-import type { Product } from "@platform/shared-types";
-import { AGENT_MODELS, anthropicApiKey, findModel } from "./runtime/models";
+import type { ChatTurn } from "@platform/shared-ai";
+import { AGENT_MODELS, defaultModelFor, findModel, modelAvailability } from "./runtime/models";
 import { isToolKey, toolCatalog } from "./runtime/tools";
 import { validMcpServerIds } from "./runtime/mcp-ids";
 import { validIntegrations } from "./runtime/integration-ids";
 import { integrationToolCatalog } from "./runtime/integrations";
+import { buildKnowledgePrompt, searchKnowledge } from "./runtime/knowledge";
+import { AGENT_TEMPLATES } from "./templates";
+import { meteredChat, withUsage } from "../usage/meter";
+import { assertWithinQuota, creditMetersFor } from "../usage/quota";
 
-const config = loadServiceConfig("bot-service", 3002);
 
 export interface AgentRow {
   id: string;
@@ -24,6 +24,7 @@ export interface AgentRow {
   mcpServerIds: string[];
   integrations: string[];
   knowledgeBaseIds: string[];
+  skillIds: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -38,19 +39,10 @@ export interface AgentInput {
   knowledgeBaseIds?: unknown;
   mcpServerIds?: unknown;
   integrations?: unknown;
+  skillIds?: unknown;
 }
 
 const MAX_STEPS_LIMIT = 20;
-
-let ollamaCheck: { at: number; ok: boolean } | null = null;
-async function ollamaReachable() {
-  if (ollamaCheck && Date.now() - ollamaCheck.at < 60_000) return ollamaCheck.ok;
-  const ok = await fetch(`${process.env.OLLAMA_URL ?? "http://localhost:11434"}/api/tags`, { signal: AbortSignal.timeout(1500) })
-    .then((r) => r.ok)
-    .catch(() => false);
-  ollamaCheck = { at: Date.now(), ok };
-  return ok;
-}
 
 @Injectable()
 export class AgentsService {
@@ -72,6 +64,7 @@ export class AgentsService {
         mcpServerIds: input.mcpServerIds !== undefined ? await validMcpServerIds(businessId, input.mcpServerIds) : [],
         integrations: input.integrations !== undefined ? validIntegrations(input.integrations) : [],
         knowledgeBaseIds: input.knowledgeBaseIds !== undefined ? this.validIds(input.knowledgeBaseIds) : [],
+        skillIds: input.skillIds !== undefined ? await this.validSkillIds(businessId, input.skillIds) : [],
       },
     });
     return this.serialize(agent);
@@ -79,20 +72,7 @@ export class AgentsService {
 
   /** Models an agent can use, and whether each is usable right now for this business. */
   async models(businessId: string) {
-    const [hasKey, ollamaUp] = await Promise.all([anthropicApiKey(businessId).then(Boolean), ollamaReachable()]);
-    return AGENT_MODELS.map((m) => ({
-      id: m.id,
-      label: m.label,
-      provider: m.provider,
-      description: m.description,
-      available: m.provider === "anthropic" ? hasKey : ollamaUp,
-      unavailableReason:
-        m.provider === "anthropic" && !hasKey
-          ? "Connect the Anthropic integration to use Claude models."
-          : m.provider === "ollama" && !ollamaUp
-            ? "The local Ollama server isn't reachable."
-            : undefined,
-    }));
+    return modelAvailability(businessId);
   }
 
   tools() {
@@ -103,9 +83,9 @@ export class AgentsService {
     return integrationToolCatalog(businessId);
   }
 
-  /** Claude when a key is configured, otherwise the local model, so new agents work out of the box. */
+  /** The business default (Settings → AI Models), else a capable cloud model it has a key for, else the local model. */
   private async defaultModel(businessId: string) {
-    return (await anthropicApiKey(businessId)) ? "claude-opus-5-5" : "llama3.2:3b";
+    return (await defaultModelFor(businessId, "capable"))?.id ?? "llama3.2:3b";
   }
 
   private validModel(model: unknown) {
@@ -136,6 +116,21 @@ export class AgentsService {
     return value as string[];
   }
 
+  /** Skill ids must be this business's skills; order is kept (it's the order skills appear in the prompt). */
+  private async validSkillIds(businessId: string, value: unknown) {
+    if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+      throw new BadRequestException("skillIds must be an array of ids");
+    }
+    const ids = [...new Set(value as string[])];
+    const found = await prisma.agentSkill.count({ where: { businessId, id: { in: ids } } });
+    if (found !== ids.length) throw new BadRequestException("One or more skills don't exist");
+    return ids;
+  }
+
+  templates() {
+    return AGENT_TEMPLATES;
+  }
+
   async list(businessId: string) {
     const agents = await prisma.agent.findMany({ where: { businessId }, orderBy: { createdAt: "desc" } });
     return agents.map((agent) => this.serialize(agent));
@@ -163,6 +158,7 @@ export class AgentsService {
         ...(updates.knowledgeBaseIds !== undefined ? { knowledgeBaseIds: this.validIds(updates.knowledgeBaseIds) } : {}),
         ...(updates.mcpServerIds !== undefined ? { mcpServerIds: await validMcpServerIds(businessId, updates.mcpServerIds) } : {}),
         ...(updates.integrations !== undefined ? { integrations: validIntegrations(updates.integrations) } : {}),
+        ...(updates.skillIds !== undefined ? { skillIds: await this.validSkillIds(businessId, updates.skillIds) } : {}),
       },
     });
     return this.serialize(agent);
@@ -174,54 +170,22 @@ export class AgentsService {
   }
 
   /** Stateless single-turn, same as BotsService.sendMessage: no memory between
-   * calls yet — each message is answered from scratch using freshly retrieved products. */
+   * calls yet — each message is answered from scratch using freshly retrieved knowledge. */
   async sendMessage(businessId: string, id: string, message: string, authorization: string | undefined) {
     if (!message.trim()) throw new BadRequestException("message is required");
     const agent = await this.require(businessId, id);
-    const products = await this.searchKnowledge(agent.knowledgeBaseIds, message, authorization);
+    await assertWithinQuota(businessId, await creditMetersFor(businessId, agent.model));
+    const knowledge = await searchKnowledge(agent.knowledgeBaseIds, message, authorization);
 
     const messages: ChatTurn[] = [
       { role: "system", content: agent.systemPrompt },
-      { role: "user", content: this.buildPrompt(message, products) },
+      { role: "user", content: buildKnowledgePrompt(message, knowledge, "Question") },
     ];
-    const reply = await chat(messages, agent.model);
-    return { reply, products };
+    const reply = await withUsage(businessId, "agent", () => meteredChat(messages, agent.model));
+    return { reply, ...knowledge };
   }
 
-  private buildPrompt(message: string, products: Product[]): string {
-    if (products.length === 0) {
-      return `${message}\n\n(No matching products were found in the knowledge base — say so rather than inventing one.)`;
-    }
-    const catalog = products
-      .map((product, i) => {
-        const price =
-          product.price !== undefined ? ` — ${product.price} ${product.currency ?? ""}`.trimEnd() : "";
-        const description = product.description ? `\n   ${product.description}` : "";
-        return `${i + 1}. ${product.title}${price}${description}`;
-      })
-      .join("\n");
-    return `Relevant products:\n${catalog}\n\nQuestion: ${message}`;
-  }
 
-  /** Calls knowledge-service directly (internal HTTP), forwarding the same
-   * business-scoped token the incoming chat request carried. */
-  private async searchKnowledge(
-    knowledgeBaseIds: string[],
-    query: string,
-    authorization: string | undefined,
-  ): Promise<Product[]> {
-    if (knowledgeBaseIds.length === 0) return [];
-    try {
-      const response = await axios.post(
-        `${config.knowledgeServiceUrl}/businesses/current/knowledge-bases/search`,
-        { query, knowledgeBaseIds },
-        { headers: authorization ? { Authorization: authorization } : undefined },
-      );
-      return response.data as Product[];
-    } catch {
-      return [];
-    }
-  }
 
   async require(businessId: string, id: string): Promise<AgentRow> {
     const agent = await prisma.agent.findUnique({ where: { id } });
@@ -244,6 +208,7 @@ export class AgentsService {
       mcpServerIds: agent.mcpServerIds,
       integrations: agent.integrations,
       knowledgeBaseIds: agent.knowledgeBaseIds,
+      skillIds: agent.skillIds,
       createdAt: agent.createdAt.toISOString(),
       updatedAt: agent.updatedAt.toISOString(),
     };

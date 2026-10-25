@@ -48,7 +48,7 @@ function toSchema(params: Record<string, ActionParam>): ClientTool["input_schema
   };
 }
 
-function validate(params: Record<string, ActionParam>, input: unknown): Record<string, unknown> {
+export function validateActionInput(params: Record<string, ActionParam>, input: unknown): Record<string, unknown> {
   const raw = input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
   const out: Record<string, unknown> = {};
   for (const [key, p] of Object.entries(params)) {
@@ -96,7 +96,7 @@ export async function loadIntegrationTools(businessId: string, providers: string
     const handler = handlers.get(toolName);
     if (!handler) return null;
     try {
-      const args = validate(handler.action.params, input);
+      const args = validateActionInput(handler.action.params, input);
       if (handler.action.sends) {
         if ((counters.sends ?? 0) >= MAX_SENDS_PER_RUN) {
           return { content: `Send limit reached (${MAX_SENDS_PER_RUN} messages/emails per answer). Not sent.`, isError: true };

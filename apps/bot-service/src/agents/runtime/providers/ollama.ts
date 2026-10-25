@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ContentBlockParam, MessageParam, ModelProvider, TurnRequest, TurnResult } from "./types";
+import { recordAiCall } from "../../../usage/meter";
 
 const baseUrl = () => process.env.OLLAMA_URL ?? "http://localhost:11434";
 
@@ -98,6 +99,7 @@ export class OllamaProvider implements ModelProvider {
     for (const call of toolCalls) {
       content.push({ type: "tool_use", id: `toolu_${randomUUID().replace(/-/g, "")}`, name: call.function.name, input: call.function.arguments ?? {} });
     }
+    recordAiCall(request.model, "ollama", usage);
     return { content, stopReason: toolCalls.length ? "tool_use" : "end_turn", usage };
   }
 }

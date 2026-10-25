@@ -24,6 +24,31 @@ export class AgentRunsProxyController {
   }
 }
 
+@Controller("businesses/current/agent-skills")
+export class AgentSkillsProxyController {
+  @All(["", "*"])
+  handle(@Req() req: Request) {
+    return forwardTo(botServiceUrl, req);
+  }
+}
+
+@Controller("businesses/current/agent-schedules")
+export class AgentSchedulesProxyController {
+  @All(["", "*"])
+  handle(@Req() req: Request) {
+    return forwardTo(botServiceUrl, req);
+  }
+}
+
+// Workspace analytics are computed in bot-service (it reads bots, agents, workflows and apps).
+@Controller("businesses/current/analytics")
+export class AnalyticsProxyController {
+  @All(["", "*"])
+  handle(@Req() req: Request) {
+    return forwardTo(botServiceUrl, req);
+  }
+}
+
 // Registered before BusinessesProxyController (see app.module.ts) so this
 // more specific path wins over the generic "businesses/*" forward.
 @Controller("businesses/current/agents")
