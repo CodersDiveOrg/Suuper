@@ -1,13 +1,15 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Query, Req } from "@nestjs/common";
 import { RequirePermission } from "@platform/shared-auth";
 import type { BusinessContext } from "@platform/shared-types";
-import { KnowledgeBasesService } from "./knowledge-bases.service";
+import { KnowledgeBasesService, type DocumentUpdate, type KnowledgeBaseUpdate } from "./knowledge-bases.service";
 
 interface CreateKnowledgeBaseBody {
   name?: string;
   /** "crawl" (default) or "documents". */
   sourceType?: string;
   sourceUrl?: string;
+  /** "crawl" only: "daily" | "weekly" | null. */
+  autoSync?: unknown;
 }
 
 interface SearchBody {
@@ -32,6 +34,7 @@ export class KnowledgeBasesController {
       body.name ?? "",
       body.sourceType ?? "crawl",
       body.sourceUrl ?? "",
+      body.autoSync,
     );
   }
 
@@ -52,10 +55,45 @@ export class KnowledgeBasesController {
     );
   }
 
+  // Static paths, also before ":id".
+  @Get("documents")
+  @RequirePermission("knowledge:read")
+  async allDocuments(
+    @Req() request: { businessContext: BusinessContext },
+    @Query("knowledgeBaseId") knowledgeBaseId?: string,
+    @Query("type") type?: string,
+    @Query("status") status?: string,
+    @Query("q") q?: string,
+  ) {
+    return this.knowledgeBasesService.listAllDocuments(request.businessContext.businessId, { knowledgeBaseId, type, status, q });
+  }
+
+  @Get("sources")
+  @RequirePermission("knowledge:read")
+  async sources(@Req() request: { businessContext: BusinessContext }) {
+    return this.knowledgeBasesService.listSources(request.businessContext.businessId);
+  }
+
   @Get(":id")
   @RequirePermission("knowledge:read")
   async get(@Req() request: { businessContext: BusinessContext }, @Param("id") id: string) {
     return this.knowledgeBasesService.get(request.businessContext.businessId, id);
+  }
+
+  @Patch(":id")
+  @RequirePermission("knowledge:write")
+  async update(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("id") id: string,
+    @Body() body: KnowledgeBaseUpdate,
+  ) {
+    return this.knowledgeBasesService.update(request.businessContext.businessId, id, body ?? {});
+  }
+
+  @Post(":id/sync")
+  @RequirePermission("knowledge:write")
+  async sync(@Req() request: { businessContext: BusinessContext }, @Param("id") id: string) {
+    return this.knowledgeBasesService.sync(request.businessContext.businessId, id);
   }
 
   @Get(":id/products")
@@ -78,6 +116,27 @@ export class KnowledgeBasesController {
     @Body() body: Record<string, unknown>,
   ) {
     return this.knowledgeBasesService.addDocument(request.businessContext.businessId, id, body ?? {});
+  }
+
+  @Get(":id/documents/:documentId")
+  @RequirePermission("knowledge:read")
+  async getDocument(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("id") id: string,
+    @Param("documentId") documentId: string,
+  ) {
+    return this.knowledgeBasesService.getDocument(request.businessContext.businessId, id, documentId);
+  }
+
+  @Patch(":id/documents/:documentId")
+  @RequirePermission("knowledge:write")
+  async updateDocument(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("id") id: string,
+    @Param("documentId") documentId: string,
+    @Body() body: DocumentUpdate,
+  ) {
+    return this.knowledgeBasesService.updateDocument(request.businessContext.businessId, id, documentId, body ?? {});
   }
 
   @Post(":id/documents/:documentId/reprocess")

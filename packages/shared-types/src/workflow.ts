@@ -77,7 +77,8 @@ export interface WorkflowStepResult {
 export interface WorkflowRun {
   id: string;
   workflowId: string;
-  trigger: "manual" | "webhook" | "schedule";
+  /** "app": started by an app automation (a record created or changed). */
+  trigger: "manual" | "webhook" | "schedule" | "app";
   status: WorkflowRunStatus;
   triggerData?: unknown;
   steps: WorkflowStepResult[];

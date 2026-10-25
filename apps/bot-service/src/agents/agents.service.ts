@@ -1,12 +1,15 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { prisma } from "@platform/database";
-import { chat, type ChatTurn } from "@platform/shared-ai";
+import type { ChatTurn } from "@platform/shared-ai";
 import { AGENT_MODELS, anthropicApiKey, findModel } from "./runtime/models";
 import { isToolKey, toolCatalog } from "./runtime/tools";
 import { validMcpServerIds } from "./runtime/mcp-ids";
 import { validIntegrations } from "./runtime/integration-ids";
 import { integrationToolCatalog } from "./runtime/integrations";
 import { buildKnowledgePrompt, searchKnowledge } from "./runtime/knowledge";
+import { AGENT_TEMPLATES } from "./templates";
+import { meteredChat, withUsage } from "../usage/meter";
+import { assertWithinQuota } from "../usage/quota";
 
 
 export interface AgentRow {
@@ -21,6 +24,7 @@ export interface AgentRow {
   mcpServerIds: string[];
   integrations: string[];
   knowledgeBaseIds: string[];
+  skillIds: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +39,7 @@ export interface AgentInput {
   knowledgeBaseIds?: unknown;
   mcpServerIds?: unknown;
   integrations?: unknown;
+  skillIds?: unknown;
 }
 
 const MAX_STEPS_LIMIT = 20;
@@ -69,6 +74,7 @@ export class AgentsService {
         mcpServerIds: input.mcpServerIds !== undefined ? await validMcpServerIds(businessId, input.mcpServerIds) : [],
         integrations: input.integrations !== undefined ? validIntegrations(input.integrations) : [],
         knowledgeBaseIds: input.knowledgeBaseIds !== undefined ? this.validIds(input.knowledgeBaseIds) : [],
+        skillIds: input.skillIds !== undefined ? await this.validSkillIds(businessId, input.skillIds) : [],
       },
     });
     return this.serialize(agent);
@@ -133,6 +139,21 @@ export class AgentsService {
     return value as string[];
   }
 
+  /** Skill ids must be this business's skills; order is kept (it's the order skills appear in the prompt). */
+  private async validSkillIds(businessId: string, value: unknown) {
+    if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+      throw new BadRequestException("skillIds must be an array of ids");
+    }
+    const ids = [...new Set(value as string[])];
+    const found = await prisma.agentSkill.count({ where: { businessId, id: { in: ids } } });
+    if (found !== ids.length) throw new BadRequestException("One or more skills don't exist");
+    return ids;
+  }
+
+  templates() {
+    return AGENT_TEMPLATES;
+  }
+
   async list(businessId: string) {
     const agents = await prisma.agent.findMany({ where: { businessId }, orderBy: { createdAt: "desc" } });
     return agents.map((agent) => this.serialize(agent));
@@ -160,6 +181,7 @@ export class AgentsService {
         ...(updates.knowledgeBaseIds !== undefined ? { knowledgeBaseIds: this.validIds(updates.knowledgeBaseIds) } : {}),
         ...(updates.mcpServerIds !== undefined ? { mcpServerIds: await validMcpServerIds(businessId, updates.mcpServerIds) } : {}),
         ...(updates.integrations !== undefined ? { integrations: validIntegrations(updates.integrations) } : {}),
+        ...(updates.skillIds !== undefined ? { skillIds: await this.validSkillIds(businessId, updates.skillIds) } : {}),
       },
     });
     return this.serialize(agent);
@@ -175,13 +197,14 @@ export class AgentsService {
   async sendMessage(businessId: string, id: string, message: string, authorization: string | undefined) {
     if (!message.trim()) throw new BadRequestException("message is required");
     const agent = await this.require(businessId, id);
+    await assertWithinQuota(businessId, ["ai_tokens"]);
     const knowledge = await searchKnowledge(agent.knowledgeBaseIds, message, authorization);
 
     const messages: ChatTurn[] = [
       { role: "system", content: agent.systemPrompt },
       { role: "user", content: buildKnowledgePrompt(message, knowledge, "Question") },
     ];
-    const reply = await chat(messages, agent.model);
+    const reply = await withUsage(businessId, "agent", () => meteredChat(messages, agent.model));
     return { reply, ...knowledge };
   }
 
@@ -208,6 +231,7 @@ export class AgentsService {
       mcpServerIds: agent.mcpServerIds,
       integrations: agent.integrations,
       knowledgeBaseIds: agent.knowledgeBaseIds,
+      skillIds: agent.skillIds,
       createdAt: agent.createdAt.toISOString(),
       updatedAt: agent.updatedAt.toISOString(),
     };

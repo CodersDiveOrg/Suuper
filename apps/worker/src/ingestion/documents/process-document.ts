@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@platform/database";
 import { embedBatch, toPgVector } from "@platform/shared-ai";
 import { loadServiceConfig } from "@platform/shared-config";
-import type { FaqItem } from "@platform/shared-types";
+import { nextAutoSync, type FaqItem } from "@platform/shared-types";
 import { chunkText } from "./chunk";
 import { crawlWebsite } from "./crawl-website";
 import { extractFileText } from "./extract-file";
@@ -59,6 +59,7 @@ export async function processDocument(knowledgeBaseId: string, documentId: strin
             errorMessage: passages.length > kept.length ? `Only the first ${kept.length} passages were kept.` : null,
             chunkCount: kept.length,
             processedAt: new Date(),
+            nextSyncAt: nextAutoSync(document.autoSync),
             fileData: null,
             ...(text !== undefined ? { text: text.slice(0, MAX_STORED_TEXT_CHARS) } : {}),
           },
@@ -71,7 +72,10 @@ export async function processDocument(knowledgeBaseId: string, documentId: strin
     const message = (error as Error).message || "Processing failed.";
     console.warn(`[worker] document ${documentId}: ${message}`);
     await prisma.knowledgeDocument
-      .update({ where: { id: documentId }, data: { status: "error", errorMessage: message, processedAt: new Date() } })
+      .update({
+        where: { id: documentId },
+        data: { status: "error", errorMessage: message, processedAt: new Date(), nextSyncAt: nextAutoSync(document.autoSync) },
+      })
       .catch(() => undefined); // deleted mid-run
   }
 

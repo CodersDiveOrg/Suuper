@@ -10,5 +10,6 @@ import { WidgetThrottlerGuard } from "./widget-throttler.guard";
   imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }])],
   controllers: [BotsController, WidgetController],
   providers: [BotsService, WidgetKeyGuard, WidgetThrottlerGuard],
+  exports: [BotsService],
 })
 export class BotsModule {}

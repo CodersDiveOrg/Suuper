@@ -76,6 +76,13 @@ export const INTEGRATION_PROVIDERS: IntegrationProvider[] = [
       { key: "phoneNumberId", label: "Phone number ID", type: "text", required: true },
       { key: "businessAccountId", label: "Business account ID", type: "text", required: true },
       { key: "accessToken", label: "Access token", type: "secret", required: true },
+      {
+        key: "appSecret",
+        label: "App secret",
+        type: "secret",
+        required: false,
+        help: "Meta app → Settings → Basic. Used to check that incoming messages really come from WhatsApp.",
+      },
     ],
   },
   {

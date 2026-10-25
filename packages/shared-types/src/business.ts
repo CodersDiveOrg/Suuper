@@ -107,13 +107,19 @@ export type Permission =
   | "workflows:read"
   | "workflows:write"
   | "workflows:run"
+  | "apps:read"
+  | "apps:write"
+  | "apps:records"
   | "mcp:read"
   | "mcp:write"
   | "knowledge:read"
   | "knowledge:write"
   | "roles:manage"
   | "integrations:read"
-  | "integrations:write";
+  | "integrations:write"
+  | "webhooks:read"
+  | "webhooks:write"
+  | "audit:read";
 
 export const ALL_PERMISSIONS: Permission[] = [
   "business:read",
@@ -130,6 +136,9 @@ export const ALL_PERMISSIONS: Permission[] = [
   "workflows:read",
   "workflows:write",
   "workflows:run",
+  "apps:read",
+  "apps:write",
+  "apps:records",
   "mcp:read",
   "mcp:write",
   "knowledge:read",
@@ -137,6 +146,9 @@ export const ALL_PERMISSIONS: Permission[] = [
   "roles:manage",
   "integrations:read",
   "integrations:write",
+  "webhooks:read",
+  "webhooks:write",
+  "audit:read",
 ];
 
 export function isPermission(value: string): value is Permission {
@@ -164,6 +176,9 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "workflows:read",
     "workflows:write",
     "workflows:run",
+    "apps:read",
+    "apps:write",
+    "apps:records",
     "mcp:read",
     "mcp:write",
     "knowledge:read",
@@ -171,6 +186,9 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "roles:manage",
     "integrations:read",
     "integrations:write",
+    "webhooks:read",
+    "webhooks:write",
+    "audit:read",
   ],
   member: [
     "business:read",
@@ -181,6 +199,8 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "agents:run",
     "workflows:read",
     "workflows:run",
+    "apps:read",
+    "apps:records",
     "mcp:read",
     "knowledge:read",
     "integrations:read",
@@ -191,6 +211,7 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "bots:read",
     "agents:read",
     "workflows:read",
+    "apps:read",
     "mcp:read",
     "knowledge:read",
     "integrations:read",

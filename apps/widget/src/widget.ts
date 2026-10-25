@@ -37,7 +37,56 @@ function readConfig() {
     themeColor: script.dataset.themeColor ?? "#111827",
     greeting: script.dataset.greeting ?? "Hi! How can I help you today?",
     position: script.dataset.position === "bottom-left" ? "bottom-left" : "bottom-right",
+    title: "Chat with us",
+    placeholder: "Type a message…",
   };
+}
+
+type WidgetConfig = ReturnType<typeof readConfig>;
+
+/**
+ * The appearance set in the dashboard. It also confirms the widget is on and
+ * this site is allowed: if not, the widget stays hidden instead of showing a
+ * chat that can't answer.
+ */
+async function loadConfig(base: WidgetConfig): Promise<WidgetConfig | null> {
+  const response = await fetch(`${base.gatewayOrigin}/public/widget/${base.widgetKey}/config`);
+  if (response.status === 403 || response.status === 404) {
+    console.warn(`[ai-platform-widget] not shown: ${response.status === 404 ? "unknown widget key" : "the widget is off or this site isn't an allowed origin"}`);
+    return null;
+  }
+  if (!response.ok) throw new Error(`Config request failed (${response.status})`);
+  const remote = (await response.json()) as { color: string; title: string; greeting: string; placeholder: string; position: string };
+  return {
+    ...base,
+    themeColor: remote.color,
+    title: remote.title,
+    greeting: remote.greeting,
+    placeholder: remote.placeholder,
+    position: remote.position === "bottom-left" ? "bottom-left" : "bottom-right",
+  };
+}
+
+/**
+ * One id per visitor per tab, so the platform can group their messages into a
+ * conversation. sessionStorage can be blocked (privacy modes): fall back to an
+ * id that lives as long as the page.
+ */
+function sessionId(widgetKey: string): string {
+  const storageKey = `ai-platform-widget-session:${widgetKey}`;
+  const fresh = () =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  try {
+    const existing = sessionStorage.getItem(storageKey);
+    if (existing) return existing;
+    const id = fresh();
+    sessionStorage.setItem(storageKey, id);
+    return id;
+  } catch {
+    return fresh();
+  }
 }
 
 function formatPrice(product: Product): string {
@@ -45,7 +94,7 @@ function formatPrice(product: Product): string {
   return ` — ${product.price} ${product.currency ?? ""}`.trimEnd();
 }
 
-function renderWidget(config: ReturnType<typeof readConfig>) {
+function renderWidget(config: WidgetConfig) {
   const host = document.createElement("div");
   host.id = "ai-platform-widget-root";
   document.body.appendChild(host);
@@ -85,10 +134,10 @@ function renderWidget(config: ReturnType<typeof readConfig>) {
     </style>
     <button class="launcher" aria-label="Open chat">💬</button>
     <div class="panel">
-      <div class="header">Chat with us</div>
+      <div class="header"></div>
       <div class="messages"></div>
       <form>
-        <input type="text" placeholder="Type a message…" autocomplete="off" />
+        <input type="text" autocomplete="off" />
         <button type="submit" class="send">Send</button>
       </form>
     </div>
@@ -100,8 +149,12 @@ function renderWidget(config: ReturnType<typeof readConfig>) {
   const form = root.querySelector<HTMLFormElement>("form")!;
   const input = root.querySelector<HTMLInputElement>("input")!;
   const sendButton = root.querySelector<HTMLButtonElement>("button.send")!;
+  // Text from the dashboard goes in as text, never as HTML.
+  root.querySelector<HTMLDivElement>(".header")!.textContent = config.title;
+  input.placeholder = config.placeholder;
 
   const history: ChatEntry[] = [{ role: "assistant", content: config.greeting }];
+  const session = sessionId(config.widgetKey);
   let opened = false;
 
   function renderMessages() {
@@ -140,9 +193,14 @@ function renderWidget(config: ReturnType<typeof readConfig>) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, sessionId: session }),
         },
       );
+      // 402: the business is over its plan's limit. The plan details are for the owner, not their visitors.
+      if (response.status === 402) {
+        history.push({ role: "error", content: "This assistant isn't available right now. Please contact us another way." });
+        return;
+      }
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = (await response.json()) as ChatMessageResponse;
       history.push({ role: "assistant", content: data.reply, products: data.products });
@@ -170,7 +228,10 @@ function renderWidget(config: ReturnType<typeof readConfig>) {
 }
 
 try {
-  renderWidget(readConfig());
+  const base = readConfig();
+  loadConfig(base)
+    .then((config) => config && renderWidget(config))
+    .catch((error) => console.error("[ai-platform-widget]", error));
 } catch (error) {
   console.error("[ai-platform-widget]", error);
 }

@@ -25,18 +25,26 @@ model Business {
   website                String?
   primaryGoal            String?
   onboardingDismissedAt  DateTime?
+  // Plan key from PLANS (shared-types/plans.ts); sets the usage limits.
+  plan                   String                  @default("starter")
   memberships            Membership[]
   roles                  Role[]
   integrationConnections IntegrationConnection[]
   invitations            Invitation[]
   bots                   Bot[]
   agents                 Agent[]
+  agentSkills            AgentSkill[]
   mcpServers             McpServer[]
   knowledgeBases         KnowledgeBase[]
   products               Product[]
   knowledgeDocuments     KnowledgeDocument[]
   knowledgeChunks        KnowledgeChunk[]
   workflows              Workflow[]
+  apps                   App[]
+  webhookEndpoints       WebhookEndpoint[]
+  usageEvents            UsageEvent[]
+  auditEvents            AuditEvent[]
+  botChannels            BotChannel[]
 }
 
 // A user is a single global account. The same user can belong to many
@@ -141,26 +149,72 @@ model IntegrationConnection {
 }
 
 model Bot {
-  id               String   @id @default(uuid())
+  id               String            @id @default(uuid())
   businessId       String
-  business         Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business         Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name             String
   systemPrompt     String
-  model            String   @default("llama3.2:1b")
+  model            String            @default("llama3.2:1b")
   mcpServerIds     String[]
   // Connected integrations (provider keys) whose actions this bot can call.
-  integrations     String[] @default([])
+  integrations     String[]          @default([])
   knowledgeBaseIds String[]
-  createdAt        DateTime @default(now())
+  createdAt        DateTime          @default(now())
   // Public embed widget: off by default. widgetKey is a public, revocable
   // identifier (not a secret bearer token) — anyone with it can chat with
   // this bot from an origin in allowedOrigins. Regenerating it invalidates
   // every live embed immediately.
-  widgetEnabled    Boolean  @default(false)
-  widgetKey        String   @unique @default(uuid())
-  allowedOrigins   String[] @default([])
+  widgetEnabled    Boolean           @default(false)
+  widgetKey        String            @unique @default(uuid())
+  allowedOrigins   String[]          @default([])
+  // { color, title, greeting, placeholder, position } (see bots.service.ts); null = defaults.
+  widgetAppearance Json?
+  conversations    BotConversation[]
+  channels         BotChannel[]
 
   @@index([businessId])
+}
+
+// One chat with a bot: a widget visitor's session, a playground session, or a
+// single message from an old embed that sends no session id. Kept for analytics
+// and for reviewing what customers asked.
+model BotConversation {
+  id              String       @id @default(uuid())
+  businessId      String
+  botId           String
+  bot             Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  source          String // widget | playground
+  // Client-generated session id; null when the client sent none.
+  sessionKey      String?
+  // Page origin the widget ran on.
+  origin          String?
+  messageCount    Int          @default(0)
+  // Replies that couldn't answer, or failed.
+  issueCount      Int          @default(0)
+  // Set while a team member has taken over a WhatsApp/Telegram chat from the
+  // inbox: the bot stays quiet until they hand it back.
+  humanTakeoverAt DateTime?
+  startedAt       DateTime     @default(now())
+  lastMessageAt   DateTime     @default(now())
+  messages        BotMessage[]
+
+  @@unique([botId, sessionKey])
+  @@index([businessId, startedAt])
+  @@index([botId, lastMessageAt])
+}
+
+model BotMessage {
+  id             String          @id @default(uuid())
+  conversationId String
+  conversation   BotConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // user | assistant | agent (a team member replying from the inbox)
+  content        String
+  // Assistant only: answered | unanswered (see bot-service chat-log.ts) | error
+  outcome        String?
+  durationMs     Int?
+  createdAt      DateTime        @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 // An internal AI assistant for the business owner/team (not a customer-facing
@@ -184,10 +238,13 @@ model Agent {
   // Connected integrations (provider keys) whose actions this agent can call.
   integrations     String[]            @default([])
   knowledgeBaseIds String[]
+  // AgentSkills whose instructions and tools are added to this agent's own.
+  skillIds         String[]            @default([])
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @default(now()) @updatedAt
   conversations    AgentConversation[]
   runs             AgentRun[]
+  schedules        AgentSchedule[]
 
   @@index([businessId])
 }
@@ -235,6 +292,8 @@ model AgentRun {
   conversation   AgentConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   userId         String?
   trigger        String             @default("chat") // chat | api | schedule
+  // Set for trigger "schedule": the AgentSchedule that fired this run.
+  scheduleId     String?
   status         String             @default("running") // running | succeeded | failed
   model          String
   input          String
@@ -249,6 +308,43 @@ model AgentRun {
   @@index([businessId, startedAt])
   @@index([agentId, startedAt])
   @@index([conversationId])
+  @@index([scheduleId, startedAt])
+}
+
+// Reusable instructions + built-in tools that any agent can be given.
+model AgentSkill {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name         String
+  description  String?
+  instructions String
+  tools        String[] @default([])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  @@index([businessId])
+}
+
+// Runs an agent with a fixed prompt on a schedule. Each firing is a new
+// conversation owned by createdById, so the result shows in their chat history.
+model AgentSchedule {
+  id          String    @id @default(uuid())
+  businessId  String
+  agentId     String
+  agent       Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name        String
+  prompt      String
+  enabled     Boolean   @default(true)
+  // Same shape as a workflow schedule trigger (frequency, time, dayOfWeek, intervalMinutes, timezone).
+  trigger     Json
+  createdById String
+  lastRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  @@index([businessId])
+  @@index([agentId])
 }
 
 model AgentRunStep {
@@ -345,21 +441,25 @@ model McpToolCall {
 }
 
 model KnowledgeBase {
-  id           String    @id @default(uuid())
+  id           String              @id @default(uuid())
   businessId   String
-  business     Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  business     Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
   name         String
   // "crawl": a store's product catalog scraped from sourceUrl.
   // "documents": files, FAQs, text and website pages added as KnowledgeDocuments.
   sourceType   String
   // The store URL to ingest, for sourceType "crawl".
   sourceUrl    String?
-  status       String    @default("syncing") // syncing | ready | error
+  status       String              @default("syncing") // syncing | ready | error
   // Set when status is "error"; e.g. "Could not find any products at that URL."
   errorMessage String?
-  productCount Int       @default(0)
+  productCount Int                 @default(0)
   syncedAt     DateTime?
-  createdAt    DateTime  @default(now())
+  // "crawl" only: re-scrape the store on a schedule. daily | weekly | null (off).
+  autoSync     String?
+  // When the worker's auto-sync sweep should next queue it; null when autoSync is off.
+  nextSyncAt   DateTime?
+  createdAt    DateTime            @default(now())
   products     Product[]
   documents    KnowledgeDocument[]
   chunks       KnowledgeChunk[]
@@ -418,6 +518,9 @@ model KnowledgeDocument {
   status          String           @default("processing") // processing | ready | error
   errorMessage    String?
   chunkCount      Int              @default(0)
+  // "website" only: re-crawl on a schedule. daily | weekly | null (off).
+  autoSync        String?
+  nextSyncAt      DateTime?
   createdAt       DateTime         @default(now())
   processedAt     DateTime?
   chunks          KnowledgeChunk[]
@@ -488,4 +591,205 @@ model WorkflowRun {
 
   @@index([workflowId, startedAt])
   @@index([businessId, startedAt])
+}
+
+// A small business app (expenses, tickets, CRM, bookings) run by the app engine
+// from its definition, with optional public forms at /a/<slug>.
+model App {
+  id          String      @id @default(uuid())
+  businessId  String
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  slug        String      @unique
+  templateKey String?
+  name        String
+  tagline     String
+  icon        String
+  color       String
+  status      String      @default("live") // live | paused
+  // AppDefinition: entities (record types and fields), views, dashboard, public forms, automations.
+  definition  Json
+  // AppSettings: knowledgeBaseIds, showPoweredBy.
+  settings    Json
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @default(now()) @updatedAt
+  records     AppRecord[]
+
+  @@index([businessId])
+}
+
+// One row of an app's data: an expense, a ticket, a lead, an appointment.
+model AppRecord {
+  id          String              @id @default(uuid())
+  businessId  String
+  appId       String
+  app         App                 @relation(fields: [appId], references: [id], onDelete: Cascade)
+  entity      String
+  // Per app and entity, shown with the entity's prefix (T-1024).
+  number      Int
+  data        Json
+  source      String              @default("app") // app | public | sample
+  createdById String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @default(now()) @updatedAt
+  activities  AppRecordActivity[]
+
+  @@unique([appId, entity, number])
+  @@index([appId, entity, createdAt])
+}
+
+// A record's timeline: created, field changes, comments.
+model AppRecordActivity {
+  id        String    @id @default(uuid())
+  recordId  String
+  record    AppRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  type      String // created | updated | comment
+  actorId   String?
+  actorName String
+  detail    Json
+  createdAt DateTime  @default(now())
+
+  @@index([recordId, createdAt])
+}
+
+// An endpoint of the business's that receives events (outgoing webhooks).
+// Deliveries are signed with the secret (Standard Webhooks scheme), which is
+// AES-GCM encrypted at rest like integration credentials.
+model WebhookEndpoint {
+  id                  String            @id @default(uuid())
+  businessId          String
+  business            Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  url                 String
+  description         String?
+  // Event types from WEBHOOK_EVENTS (shared-types).
+  events              String[]
+  enabled             Boolean           @default(true)
+  secretEncrypted     String
+  // Deliveries that failed every retry in a row; reset by a success.
+  consecutiveFailures Int               @default(0)
+  // Why the platform turned it off (too many failures), cleared when re-enabled.
+  disabledReason      String?
+  createdById         String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  deliveries          WebhookDelivery[]
+
+  @@index([businessId])
+}
+
+// One event sent (or being sent) to one endpoint. Kept 30 days.
+model WebhookDelivery {
+  id             String          @id @default(uuid())
+  businessId     String
+  endpointId     String
+  endpoint       WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  // Same for redeliveries, so receivers can de-duplicate on the webhook-id header.
+  eventId        String
+  eventType      String
+  payload        Json
+  status         String          @default("pending") // pending | succeeded | failed
+  attempts       Int             @default(0)
+  responseStatus Int?
+  responseBody   String?
+  error          String?
+  durationMs     Int?
+  nextAttemptAt  DateTime?
+  createdAt      DateTime        @default(now())
+  lastAttemptAt  DateTime?
+
+  @@index([endpointId, createdAt])
+  @@index([businessId, createdAt])
+}
+
+// Metering ledger (bot-service usage/meter.ts): one row per AI model call
+// ("ai_call", with tokens) and one per bot reply ("bot_reply"). Monthly usage
+// and plan limits are computed from it.
+model UsageEvent {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  type         String // ai_call | bot_reply
+  // bot | agent | workflow | app
+  feature      String
+  model        String?
+  provider     String? // anthropic | ollama
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  @@index([businessId, createdAt])
+}
+
+// Routes a messaging integration (WhatsApp, Telegram) to one bot: customer
+// messages arrive on the public webhook /hooks/channels/:webhookKey, the bot
+// answers and the reply goes back through the provider. Credentials stay on
+// the business's IntegrationConnection; one bot per provider per business.
+model BotChannel {
+  id            String           @id @default(uuid())
+  businessId    String
+  business      Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  botId         String
+  bot           Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  provider      String // whatsapp | telegram
+  enabled       Boolean          @default(true)
+  // Public, revocable identifier in the webhook URL (like Bot.widgetKey).
+  webhookKey    String           @unique @default(uuid())
+  // WhatsApp: the verify token Meta echoes when subscribing the webhook.
+  // Telegram: the secret_token sent back on every update.
+  verifyToken   String           @default(uuid())
+  messageCount  Int              @default(0)
+  lastMessageAt DateTime?
+  lastError     String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @default(now()) @updatedAt
+  messages      ChannelMessage[]
+
+  @@unique([businessId, provider])
+  @@index([botId])
+}
+
+// One message in or out of a channel. Also the bot's short memory: the last
+// few messages with the same contact are sent along with each new question.
+model ChannelMessage {
+  id          String     @id @default(uuid())
+  channelId   String
+  channel     BotChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  businessId  String
+  // WhatsApp number or Telegram chat id.
+  contact     String
+  contactName String?
+  direction   String // in | out
+  text        String
+  // Provider message id; unique so webhook retries aren't answered twice.
+  externalId  String?    @unique
+  error       String?
+  createdAt   DateTime   @default(now())
+
+  @@index([channelId, contact, createdAt])
+  @@index([channelId, createdAt])
+}
+
+// Who changed what (see @platform/database audit.ts): written for successful
+// changes members make through the dashboard/API, plus sign-ins and joins.
+model AuditEvent {
+  id           String   @id @default(uuid())
+  businessId   String
+  business     Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  // Null for the platform itself.
+  actorId      String?
+  // Name or email when it happened, so the log still reads after someone leaves.
+  actorName    String?
+  // "<resourceType>.<verb>", e.g. "bot.updated", "member.removed".
+  action       String
+  resourceType String
+  resourceId   String?
+  resourceName String?
+  // Field names that changed, plus values for a few safe fields (role, plan, enabled…).
+  details      Json?
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  @@index([businessId, createdAt])
+  @@index([businessId, resourceType, createdAt])
+  @@index([businessId, actorId, createdAt])
 }

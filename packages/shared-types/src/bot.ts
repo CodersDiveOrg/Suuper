@@ -11,11 +11,50 @@ export interface Bot {
   createdAt: string;
 }
 
+/** How the website widget looks. Stored on the bot; sites pick changes up on their next page load. */
+export interface WidgetAppearance {
+  /** Hex, e.g. "#4f46e5": launcher, header and the visitor's bubbles. */
+  color: string;
+  /** Panel header. */
+  title: string;
+  /** First message shown when the panel opens. */
+  greeting: string;
+  placeholder: string;
+  position: "bottom-right" | "bottom-left";
+}
+
+export const DEFAULT_WIDGET_APPEARANCE: WidgetAppearance = {
+  color: "#111827",
+  title: "Chat with us",
+  greeting: "Hi! How can I help you today?",
+  placeholder: "Type a message…",
+  position: "bottom-right",
+};
+
 /** A bot's public embed widget configuration. widgetKey is public/revocable, not a secret. */
 export interface WidgetSettings {
   widgetEnabled: boolean;
   widgetKey: string;
   allowedOrigins: string[];
+  appearance: WidgetAppearance;
+}
+
+/** What the embed script loads before it renders (public, origin-checked). */
+export type PublicWidgetConfig = WidgetAppearance & { botName: string };
+
+/** One bot on the Widgets page: its settings plus the last 30 days of widget chats. */
+export interface WidgetOverview extends WidgetSettings {
+  botId: string;
+  botName: string;
+  stats: {
+    conversations: number;
+    messages: number;
+    /** Conversations with at least one reply the bot couldn't answer. */
+    withIssues: number;
+    lastConversationAt: string | null;
+    /** Sites the widget actually ran on, busiest first. */
+    origins: { origin: string; conversations: number }[];
+  };
 }
 
 export interface McpServer {
@@ -83,6 +122,8 @@ export interface KnowledgePassage {
   title: string;
   content: string;
   sourceUrl?: string;
+  /** Cosine similarity to the query (0–1, higher is closer). */
+  score?: number;
 }
 
 /** Response of knowledge-service's search: catalog matches plus document passages. */
@@ -114,4 +155,36 @@ export interface ChatMessageResponse {
   reply: string;
   products: Product[];
   passages: KnowledgePassage[];
+}
+
+export type ChannelProvider = "whatsapp" | "telegram";
+
+/** A messaging integration routed to one bot (GET /businesses/current/bots/channels). */
+export interface BotChannel {
+  provider: ChannelProvider;
+  /** The integration is connected and enabled under Integrations. */
+  integrationConnected: boolean;
+  channel: {
+    id: string;
+    botId: string;
+    enabled: boolean;
+    /** Paste into the provider (WhatsApp) — Telegram is registered automatically. */
+    webhookUrl: string;
+    /** WhatsApp only: the verify token Meta asks for alongside the callback URL. */
+    verifyToken?: string;
+    messageCount: number;
+    lastMessageAt?: string;
+    lastError?: string;
+    createdAt: string;
+  } | null;
+}
+
+export interface ChannelMessage {
+  id: string;
+  contact: string;
+  contactName?: string;
+  direction: "in" | "out";
+  text: string;
+  error?: string;
+  createdAt: string;
 }

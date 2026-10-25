@@ -6,7 +6,8 @@ import { AppModule } from "./app.module";
 
 async function bootstrap() {
   const config = loadServiceConfig("api-gateway", 3010);
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // rawBody: channel webhooks are relayed byte for byte (WhatsApp signs the raw body).
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   // Knowledge-base file uploads arrive base64 in JSON (5 MB file ≈ 6.7 MB body).
   app.useBodyParser("json", { limit: "8mb" });
   app.enableCors();

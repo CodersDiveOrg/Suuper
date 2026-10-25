@@ -173,12 +173,77 @@ infra/
   workflows (`businesses/current/workflows`, public `hooks/workflows/:key`): CRUD, plus an in-process
   BullMQ worker on the `run-workflow` queue that executes runs and schedule triggers (job
   schedulers, reconciled against the database on startup). They live here because steps reuse the
-  agent runtime's models, knowledge search and integration actions.
+  agent runtime's models, knowledge search and integration actions. And apps
+  (`businesses/current/apps`, public `public/apps/:slug`): small business apps (tickets, CRM,
+  bookings, expenses) run by one engine from a stored definition. Records live in `AppRecord` with a
+  timeline in `AppRecordActivity`; dashboards are computed on request; automations start workflows;
+  AI helpers read the app's numbers and linked knowledge bases. The web app serves the public forms
+  at `/a/<slug>`. Agents (`businesses/current/agents`, `agent-runs`, `agent-skills`,
+  `agent-schedules`): CRUD, private per-user conversations and the tool-calling runtime; run history
+  with an `agent-runs/analytics` rollup (runs, success rate, tokens, estimated cost from
+  `AGENT_MODELS[].pricing`); skills (`AgentSkill`: instructions + built-in tools appended to an
+  agent's own at run time via `Agent.skillIds`); a static template catalog (`agents/templates`); and
+  schedules (`AgentSchedule`), fired by job schedulers on the `run-agent-schedule` queue (one run
+  at a time, at most hourly). Each firing opens a new conversation owned by the schedule's creator
+  and records an `AgentRun` with `trigger: "schedule"` and `scheduleId`. The website widget's look
+  (`Bot.widgetAppearance`: color, title, greeting, placeholder, position) lives on the bot: the embed
+  script first calls `GET public/widget/:widgetKey/config` (same key + Origin check as messages) and
+  renders nothing when the widget is off or the site isn't allowed, so dashboard changes reach live
+  sites without a new snippet. `GET businesses/current/bots/widgets` lists every bot's widget with
+  30-day widget conversation stats and the origins it ran on. Bot chats (widget and playground) are
+  logged to `BotConversation` / `BotMessage`, grouped by a client session id (the widget keeps one
+  per tab in sessionStorage; requests without one become one-message conversations). Each reply is
+  tagged `answered`, `unanswered` (the bot said it couldn't help, or found nothing in its knowledge;
+  see `bots/chat-log.ts`) or `error`. Logging is best-effort and never fails a chat. Workspace
+  analytics (`businesses/current/analytics/overview`) roll up bot conversations, agent runs,
+  workflow runs, app records and MCP tool calls per day in the viewer's timezone, including only the
+  sections the caller has read permission for. Outgoing webhooks (`businesses/current/webhooks`,
+  `webhooks:read` / `webhooks:write`): a business registers up to 20 `WebhookEndpoint`s, each
+  subscribed to event types from `WEBHOOK_EVENTS` (shared-types: app record created/updated/deleted,
+  bot conversation started / question unanswered, agent and workflow run succeeded/failed). Code
+  paths call `emitWebhookEvent` (`webhooks/delivery.ts`), which writes a `WebhookDelivery` per
+  subscribed endpoint and queues it on `webhook-delivery`; the worker POSTs JSON signed the Standard
+  Webhooks way (`webhook-id` / `webhook-timestamp` / `webhook-signature`, HMAC-SHA256 with the
+  endpoint's `whsec_` secret, AES-GCM encrypted at rest), through the SSRF guard, no redirects, 15s
+  timeout. Non-2xx responses are retried 5 times (1, 2, 4, 8, 16 minutes); after 15 deliveries in a
+  row fail every retry the endpoint is turned off. https is required unless `MCP_ALLOW_PRIVATE_URLS`
+  is set, and URLs pointing at this platform's own `/hooks/` are refused (loops). Deliveries
+  (payload and response) are pruned after 30 days by a daily job. Usage and plans: every model
+  call in bot-service is written to `UsageEvent` (`usage/meter.ts`): callers set the business and
+  feature once with `withUsage()` (an AsyncLocalStorage context), and both model providers plus
+  `meteredChat` record tokens from it; each bot answer also records a `bot_reply`. `Business.plan`
+  picks limits from `PLANS` (shared-types `plans.ts`): monthly bot replies, AI tokens, agent runs
+  and workflow runs (UTC calendar month), and current bots, seats, knowledge storage and app
+  records. Limits are checked before the work starts and answer 402 `quota_exceeded`: bot replies
+  and creation (bot-service), agent runs and chats, workflow runs (the run fails with the reason)
+  and their AI steps, app AI and new records, invitations (identity-service) and new knowledge
+  sources (knowledge-service, via `knowledgeStorageBytes` in `@platform/database`). The widget
+  shows visitors a neutral "unavailable" message instead of the plan text.
+  `businesses/current/usage` serves the Usage page; `PATCH usage/plan` (business:manage) changes the
+  plan directly until billing exists.
+- Audit log (`AuditEvent`): bot-service, identity-service, knowledge-service and mcp-gateway each
+  mount `auditMiddleware` from `@platform/database` (`audit.ts`). It recognises the resource and
+  verb from the URL of every POST/PATCH/PUT/DELETE under `/businesses/current/...`, looks up the
+  item's name before the handler runs (so deletes keep it), and writes the event only when the
+  response succeeded for a member of that business. It keeps changed field names, values for a few
+  safe fields (role, plan, enabled, name…), never secrets, and the client IP and User-Agent that
+  api-gateway forwards. Chats, app record edits, searches, AI helpers and tests are skipped, as are
+  public routes (no member context). identity-service also records workspace sign-ins and
+  invitation joins explicitly, and serves `businesses/current/audit-log` (list with filters,
+  `facets`, `export`), behind the `audit:read` permission (owners and admins by default).
 - `worker`: BullMQ consumer for `ingest-knowledge-base` jobs; tiered store scraper (Shopify /
   WooCommerce / JSON-LD / local-LLM fallback) + embedding + `Product` write-back. Jobs with a
   `documentId` instead extract text (pdf-parse, mammoth, or a same-host website crawl capped at 25
   pages and checked by the SSRF guard on every hop), chunk it, embed it, and replace that document's
-  `KnowledgeChunk`s. Uploaded file bytes are dropped once extracted.
+  `KnowledgeChunk`s. Uploaded file bytes are dropped once extracted. A store re-sync replaces the
+  catalog's `Product`s in one transaction (a failed sync keeps the last good catalog and records the
+  error). Store catalogs (`KnowledgeBase.autoSync`) and website documents
+  (`KnowledgeDocument.autoSync`) can re-sync daily or weekly: a repeating `auto-sync` job on the same
+  queue runs every 10 minutes and queues whatever is past its `nextSyncAt`, and each finished sync
+  sets the next one. knowledge-service also serves the workspace-wide document list
+  (`knowledge-bases/documents`), the data sources list (`knowledge-bases/sources`), document detail
+  and edit (rename; text and FAQ edits re-index), `POST :id/sync` for stores, and search results with
+  a cosine similarity `score` per passage.
 - `api-gateway`: proxies `/auth`, `/businesses`, `/invitations` to `identity-service`,
   `/businesses/current/knowledge-bases` to `knowledge-service`, and `/businesses/current/bots` to
   `bot-service`.
@@ -192,7 +257,8 @@ infra/
 ## What's deliberately not built yet
 
 `mcp-gateway` still exposes only `/health` — no MCP provisioning yet, so bots can't call tools,
-only retrieve knowledge. The chat endpoint is stateless (no persisted conversation history yet).
+only retrieve knowledge. The bot chat endpoint is stateless for answering (bot conversations are logged for analytics, but
+past turns aren't fed back to the model from the server).
 Ingestion is one-shot on creation — no re-sync/refresh trigger for an existing knowledge base yet.
 Also pending: enterprise SSO, gateway-side JWT validation + rate limiting, and the Postgres RLS
 policies.

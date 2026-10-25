@@ -16,6 +16,8 @@ export interface Agent {
   maxSteps: number;
   mcpServerIds: string[];
   knowledgeBaseIds: string[];
+  /** AgentSkill ids; their instructions and tools are added at run time. */
+  skillIds: string[];
   createdAt: string;
   updatedAt: string;
 }

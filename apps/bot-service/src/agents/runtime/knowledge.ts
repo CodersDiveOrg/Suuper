@@ -1,4 +1,5 @@
 import axios from "axios";
+import { signBusinessToken } from "@platform/shared-auth";
 import { loadServiceConfig } from "@platform/shared-config";
 import type { KnowledgeSearchResult } from "@platform/shared-types";
 
@@ -49,5 +50,11 @@ export function buildKnowledgePrompt(message: string, { products, passages }: Kn
       .join("\n");
     sections.push(`Relevant products:\n${catalog}`);
   }
-  return `${sections.join("\n\n")}\n\nAnswer only from the information above when it covers the question.\n\n${questionLabel}: ${message}`;
+  return `${sections.join("\n\n")}\n\nAnswer only from the information above when it covers the question, and don't add details it doesn't state. Reply directly in your own words, without labels like "Q:" or "A:".\n\n${questionLabel}: ${message}`;
+}
+
+/** Searches a business's knowledge as bot-service itself (apps' AI helpers), with a short-lived read token. */
+export function searchKnowledgeFor(businessId: string, knowledgeBaseIds: string[], query: string): Promise<KnowledgeSearchResult> {
+  const token = signBusinessToken({ userId: "bot-service", businessId, role: "member", permissions: ["knowledge:read"] });
+  return searchKnowledge(knowledgeBaseIds, query, `Bearer ${token}`);
 }

@@ -8,5 +8,7 @@ import { WorkflowsService } from "./workflows.service";
   // ThrottlerModule is global (registered in BotsModule); the webhook route sets its own limit.
   controllers: [WorkflowsController, WorkflowWebhookController],
   providers: [WorkflowsService, WorkflowQueue, WebhookThrottlerGuard],
+  // Apps start a workflow when one of their forms is submitted.
+  exports: [WorkflowsService],
 })
 export class WorkflowsModule {}

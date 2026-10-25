@@ -10,7 +10,7 @@ import {
   UnauthorizedException,
 } from "@nestjs/common";
 import bcrypt from "bcryptjs";
-import { prisma } from "@platform/database";
+import { prisma, recordAuditEvent } from "@platform/database";
 import { signBusinessToken, signUserToken } from "@platform/shared-auth";
 import { type BusinessRole, type BusinessSummary, type User as UserDto } from "@platform/shared-types";
 import { RolesService } from "../roles/roles.service";
@@ -185,7 +185,7 @@ export class AuthService {
   }
 
   /** Exchange a user token for a business-scoped token for one of the user's businesses. */
-  async createBusinessSession(userId: string, businessId: string) {
+  async createBusinessSession(userId: string, businessId: string, origin?: { ip: string | null; userAgent: string | null }) {
     const membership = await prisma.membership.findUnique({
       where: { userId_businessId: { userId, businessId } },
       include: { business: true },
@@ -196,6 +196,8 @@ export class AuthService {
 
     const role = membership.role as BusinessRole;
     const permissions = await this.rolesService.resolvePermissions(businessId, role);
+    // Opening a workspace is its sign-in (the user-level login has no business yet).
+    await recordAuditEvent({ businessId, actorId: userId, action: "member.signed_in", resourceType: "member", resourceId: userId, ...origin });
 
     return {
       accessToken: signBusinessToken({ userId, businessId, role, permissions }),

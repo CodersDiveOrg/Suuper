@@ -34,11 +34,14 @@ interface UpdateBotBody {
 
 interface SendMessageBody {
   message?: string;
+  /** Groups playground messages into one logged conversation. */
+  sessionId?: unknown;
 }
 
 interface UpdateWidgetSettingsBody {
   enabled?: boolean;
   allowedOrigins?: string[];
+  appearance?: unknown;
 }
 
 // Business comes from the token, so the path is fixed at "current" — same
@@ -65,6 +68,13 @@ export class BotsController {
   @RequirePermission("bots:read")
   async list(@Req() request: { businessContext: BusinessContext }) {
     return this.botsService.list(request.businessContext.businessId);
+  }
+
+  // Before ":id". Includes widget keys, so it's gated like the per-bot widget settings.
+  @Get("widgets")
+  @RequirePermission("bots:write")
+  async listWidgets(@Req() request: { businessContext: BusinessContext }) {
+    return this.botsService.listWidgets(request.businessContext.businessId);
   }
 
   @Get(":id")
@@ -103,6 +113,7 @@ export class BotsController {
       id,
       body.message ?? "",
       request.headers.authorization,
+      body.sessionId,
     );
   }
 

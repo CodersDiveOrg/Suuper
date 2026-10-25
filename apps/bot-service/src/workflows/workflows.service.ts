@@ -11,7 +11,7 @@ import {
 } from "@platform/shared-types";
 import { AGENT_MODELS } from "../agents/runtime/models";
 import { INTEGRATION_ACTIONS } from "../agents/runtime/integrations/actions";
-import { isValidTimezone, MINUTE_INTERVALS } from "./engine/schedule";
+import { parseScheduleTrigger } from "./engine/schedule";
 import { WorkflowQueue } from "./workflow-queue";
 
 const config = loadServiceConfig("bot-service", 3002);
@@ -135,6 +135,17 @@ export class WorkflowsService {
     return { accepted: true, runId: run.id };
   }
 
+  /** A form submitted on an app's page. Runs whether or not the workflow is on: linking it to the app is the opt-in. */
+  async runFromApp(businessId: string, workflowId: string, triggerData: object) {
+    const workflow = await prisma.workflow.findUnique({ where: { id: workflowId } });
+    if (!workflow || workflow.businessId !== businessId || (workflow.steps as unknown[]).length === 0) return null;
+    const run = await prisma.workflowRun.create({
+      data: { businessId, workflowId, trigger: "app", triggerData: this.validTriggerData(triggerData) },
+    });
+    await this.queue.enqueueRun(run.id);
+    return run.id;
+  }
+
   async listRuns(businessId: string, id: string, limit?: string) {
     await this.require(businessId, id);
     const runs = await prisma.workflowRun.findMany({
@@ -187,28 +198,7 @@ export class WorkflowsService {
     if (t.type === "manual" || t.type === "webhook") return { type: t.type };
     if (t.type !== "schedule") throw new BadRequestException('trigger.type must be "manual", "webhook" or "schedule"');
 
-    const frequency = t.frequency;
-    if (frequency !== "minutes" && frequency !== "hourly" && frequency !== "daily" && frequency !== "weekly") {
-      throw new BadRequestException("Choose how often the schedule runs");
-    }
-    const timezone = typeof t.timezone === "string" && isValidTimezone(t.timezone) ? t.timezone : null;
-    if (!timezone) throw new BadRequestException("Choose a valid timezone");
-    const out: WorkflowTrigger = { type: "schedule", frequency, timezone };
-    if (frequency === "minutes") {
-      if (!MINUTE_INTERVALS.includes(Number(t.intervalMinutes))) {
-        throw new BadRequestException(`Run every ${MINUTE_INTERVALS.join(", ")} minutes`);
-      }
-      out.intervalMinutes = Number(t.intervalMinutes);
-    } else {
-      if (typeof t.time !== "string" || !/^([01]\d|2[0-3]):[0-5]\d$/.test(t.time)) throw new BadRequestException("Choose a time (HH:MM)");
-      out.time = t.time;
-    }
-    if (frequency === "weekly") {
-      const day = Number(t.dayOfWeek);
-      if (!Number.isInteger(day) || day < 0 || day > 6) throw new BadRequestException("Choose a day of the week");
-      out.dayOfWeek = day;
-    }
-    return out;
+    return parseScheduleTrigger(t);
   }
 
   private validSteps(steps: unknown): WorkflowStep[] {

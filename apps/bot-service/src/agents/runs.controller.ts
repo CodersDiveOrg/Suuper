@@ -12,9 +12,16 @@ export class RunsController {
   @RequirePermission("agents:read")
   async list(
     @Req() req: { businessContext: BusinessContext },
-    @Query() query: { agentId?: string; status?: string; limit?: string; before?: string },
+    @Query() query: { agentId?: string; status?: string; trigger?: string; scheduleId?: string; limit?: string; before?: string },
   ) {
     return this.runs.list(req.businessContext, query);
+  }
+
+  // Declared before ":runId" so it isn't captured as a run id.
+  @Get("analytics")
+  @RequirePermission("agents:read")
+  async analytics(@Req() req: { businessContext: BusinessContext }, @Query() query: { days?: string; timezone?: string }) {
+    return this.runs.analytics(req.businessContext, query);
   }
 
   @Get(":runId")

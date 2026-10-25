@@ -1,6 +1,5 @@
 import axios from "axios";
 import { guardedHttpAgent, guardedHttpsAgent, isBlockedLiteralHost, assertPublicUrl } from "@platform/shared-auth";
-import { chat } from "@platform/shared-ai";
 import { loadServiceConfig } from "@platform/shared-config";
 import { signBusinessToken } from "@platform/shared-auth";
 import type { WorkflowStep } from "@platform/shared-types";
@@ -13,6 +12,8 @@ import { validateActionInput } from "../../agents/runtime/integrations";
 import { ActionError } from "../../agents/runtime/integrations/http";
 import { buildKnowledgePrompt, searchKnowledge } from "../../agents/runtime/knowledge";
 import { fill, lookup, type TemplateContext } from "./template";
+import { meteredChat } from "../../usage/meter";
+import { assertWithinQuota, QuotaExceededException } from "../../usage/quota";
 
 const config = loadServiceConfig("bot-service", 3002);
 
@@ -54,6 +55,12 @@ async function runAi(step: Extract<WorkflowStep, { type: "ai" }>, ctx: StepConte
   const modelId = step.model || DEFAULT_AI_MODEL;
   const model = findModel(modelId);
   if (!model) throw new StepError(`Unknown model "${modelId}"`);
+  try {
+    await assertWithinQuota(ctx.businessId, ["ai_tokens"]);
+  } catch (err) {
+    if (err instanceof QuotaExceededException) throw new StepError(err.message);
+    throw err;
+  }
 
   let userContent = prompt;
   if (step.knowledgeBaseIds?.length) {
@@ -81,7 +88,7 @@ async function runAi(step: Extract<WorkflowStep, { type: "ai" }>, ctx: StepConte
     });
     ({ reply: text } = await runStatelessLoop({ provider, model: modelId, system, userContent, toolSet, maxSteps: 1 }));
   } else {
-    text = await chat(
+    text = await meteredChat(
       [
         { role: "system", content: system },
         { role: "user", content: userContent },

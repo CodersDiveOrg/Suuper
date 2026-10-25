@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { AgentModel } from "../models";
 import type { ContentBlockParam, ModelProvider, TurnRequest, TurnResult } from "./types";
+import { recordAiCall } from "../../../usage/meter";
 
 const MAX_JSON_RETRIES = 2;
 
@@ -74,17 +75,15 @@ export class AnthropicProvider implements ModelProvider {
         continue;
       }
 
-      return {
-        content: sanitizeFallbackContent(message.content),
-        stopReason: message.stop_reason ?? "end_turn",
-        usage: {
-          inputTokens:
-            message.usage.input_tokens +
-            (message.usage.cache_read_input_tokens ?? 0) +
-            (message.usage.cache_creation_input_tokens ?? 0),
-          outputTokens: message.usage.output_tokens,
-        },
+      const usage = {
+        inputTokens:
+          message.usage.input_tokens +
+          (message.usage.cache_read_input_tokens ?? 0) +
+          (message.usage.cache_creation_input_tokens ?? 0),
+        outputTokens: message.usage.output_tokens,
       };
+      recordAiCall(request.model, "anthropic", usage);
+      return { content: sanitizeFallbackContent(message.content), stopReason: message.stop_reason ?? "end_turn", usage };
     }
   }
 }

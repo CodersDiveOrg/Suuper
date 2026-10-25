@@ -1,11 +1,40 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from "@nestjs/common";
 import Anthropic from "@anthropic-ai/sdk";
 import { prisma, Prisma } from "@platform/database";
-import { findModel, requireAnthropicKey } from "./models";
+import { emitWebhookEvent } from "../../webhooks/delivery";
+import { estimateCostUsd, findModel, requireAnthropicKey } from "./models";
 import { AnthropicProvider } from "./providers/anthropic";
 import { OllamaProvider } from "./providers/ollama";
 import type { ContentBlockParam, MessageParam, ModelProvider } from "./providers/types";
+import { loadSkills, withSkills } from "./skills";
 import { buildToolSet } from "./toolset";
+import { withUsage } from "../../usage/meter";
+import { assertWithinQuota } from "../../usage/quota";
+
+type AgentRunRow = Prisma.AgentRunGetPayload<object>;
+
+/** agent.run.succeeded / agent.run.failed for a finished run. */
+export function emitAgentRunEvent(run: AgentRunRow) {
+  emitWebhookEvent(run.businessId, run.status === "succeeded" ? "agent.run.succeeded" : "agent.run.failed", async () => {
+    const agent = await prisma.agent.findUnique({ where: { id: run.agentId }, select: { name: true } });
+    return {
+      agent: { id: run.agentId, name: agent?.name ?? "" },
+      run: {
+        id: run.id,
+        trigger: run.trigger,
+        status: run.status,
+        output: run.output,
+        error: run.error,
+        model: run.model,
+        inputTokens: run.inputTokens,
+        outputTokens: run.outputTokens,
+        costUsd: estimateCostUsd(run.model, run.inputTokens, run.outputTokens),
+        startedAt: run.startedAt.toISOString(),
+        finishedAt: run.finishedAt?.toISOString() ?? null,
+      },
+    };
+  });
+}
 
 /** Streamed to the client while a run is in progress (SSE event name = type). */
 export type RunEvent =
@@ -25,6 +54,17 @@ interface AgentForRun {
   knowledgeBaseIds: string[];
   mcpServerIds: string[];
   integrations: string[];
+  skillIds: string[];
+}
+
+interface RunParams {
+  agent: AgentForRun;
+  conversationId: string;
+  userId: string;
+  input: string;
+  emit: (event: RunEvent) => void;
+  trigger?: "chat" | "schedule";
+  scheduleId?: string;
 }
 
 // A "running" run older than this is treated as crashed and no longer blocks the conversation.
@@ -48,13 +88,12 @@ export class AgentRunner {
    * persisted as it happens (messages append-only, plus a run + steps record),
    * so a dropped client connection doesn't lose work.
    */
-  async run(params: {
-    agent: AgentForRun;
-    conversationId: string;
-    userId: string;
-    input: string;
-    emit: (event: RunEvent) => void;
-  }) {
+  async run(params: RunParams) {
+    await assertWithinQuota(params.agent.businessId, ["agent_runs", "ai_tokens"]);
+    return withUsage(params.agent.businessId, "agent", () => this.execute(params));
+  }
+
+  private async execute(params: RunParams) {
     const { agent, conversationId, userId, emit } = params;
     const input = params.input.trim();
     if (!input) throw new BadRequestException("message is required");
@@ -78,7 +117,8 @@ export class AgentRunner {
         agentId: agent.id,
         conversationId,
         userId,
-        trigger: "chat",
+        trigger: params.trigger ?? "chat",
+        scheduleId: params.scheduleId,
         model: agent.model,
         input,
       },
@@ -100,10 +140,12 @@ export class AgentRunner {
       await prisma.agentMessage.create({ data: { conversationId, runId: run.id, role, content: json(content) } });
     };
 
+    const skills = await loadSkills(agent.businessId, agent.skillIds);
+    const system = withSkills(agent.systemPrompt, skills);
     const toolSet = await buildToolSet({
       businessId: agent.businessId,
       provider: model.provider,
-      builtInTools: agent.tools,
+      builtInTools: [...new Set([...agent.tools, ...skills.flatMap((s) => s.tools)])],
       knowledgeBaseIds: agent.knowledgeBaseIds,
       mcpServerIds: agent.mcpServerIds,
       integrations: agent.integrations,
@@ -119,12 +161,13 @@ export class AgentRunner {
     let pendingToolUses: { id: string; name: string }[] = [];
 
     const finish = async (status: "succeeded" | "failed", error?: string) => {
-      await prisma.agentRun.update({
+      const finished = await prisma.agentRun.update({
         where: { id: run.id },
         data: { status, output, error, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, finishedAt: new Date() },
       });
       await prisma.agentConversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
       emit({ type: "run_finished", runId: run.id, status, output, usage, error });
+      emitAgentRunEvent(finished);
     };
 
     try {
@@ -138,7 +181,7 @@ export class AgentRunner {
 
         const started = Date.now();
         const turn = await provider.runTurn(
-          { model: agent.model, system: agent.systemPrompt, messages, tools: clientTools, serverTools },
+          { model: agent.model, system, messages, tools: clientTools, serverTools },
           (text) => emit({ type: "text_delta", text }),
         );
         usage.inputTokens += turn.usage.inputTokens;

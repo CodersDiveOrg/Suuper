@@ -3,12 +3,15 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
 } from "@nestjs/common";
 import bcrypt from "bcryptjs";
-import { prisma } from "@platform/database";
+import { memberSeats, prisma, recordAuditEvent } from "@platform/database";
+import { planFor, quotaExceededBody } from "@platform/shared-types";
 import { signUserToken } from "@platform/shared-auth";
 import type { BusinessRole } from "@platform/shared-types";
 import { RolesService, type RoleActor } from "../roles/roles.service";
@@ -73,6 +76,13 @@ export class InvitationsService {
     });
     if (existing && this.effectiveStatus(existing) === "pending") {
       throw new ConflictException("An invitation for this email is already pending. Use Resend instead.");
+    }
+
+    // Pending invitations hold a seat, so the plan's member limit counts them.
+    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { plan: true } });
+    const plan = planFor(business?.plan);
+    if ((await memberSeats(businessId)) >= plan.limits.members) {
+      throw new HttpException(quotaExceededBody("members", plan), HttpStatus.PAYMENT_REQUIRED);
     }
 
     const token = newToken();
@@ -221,7 +231,7 @@ export class InvitationsService {
     invitation: { id: string; businessId: string; role: string },
     resolveUser: (tx: TransactionClient) => Promise<U>,
   ): Promise<U> {
-    return prisma.$transaction(async (tx) => {
+    const joined = await prisma.$transaction(async (tx) => {
       const { count } = await tx.invitation.updateMany({
         where: { id: invitation.id, status: "pending" },
         data: { status: "accepted" },
@@ -236,6 +246,17 @@ export class InvitationsService {
       });
       return user;
     });
+    // Accepting is signed with a user token, so the audit middleware doesn't see it.
+    const userId = typeof joined === "string" ? joined : joined.id;
+    await recordAuditEvent({
+      businessId: invitation.businessId,
+      actorId: userId,
+      action: "member.joined",
+      resourceType: "member",
+      resourceId: userId,
+      details: { values: { role: invitation.role } },
+    });
+    return joined;
   }
 
   /** Returns whether the email went out; a failed send leaves the invite in place to Resend. */

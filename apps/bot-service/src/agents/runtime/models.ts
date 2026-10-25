@@ -13,6 +13,8 @@ export interface AgentModel {
   effort?: "low" | "medium" | "high";
   /** Anthropic only: opt into server-side refusal fallbacks (supported on Opus 5.5 / Sonnet 5.5). */
   fallbacks?: boolean;
+  /** USD per million input / output tokens, for cost estimates. Local models are free. */
+  pricing: { input: number; output: number };
 }
 
 // The models an agent can be set to. Order is the order shown in the UI.
@@ -24,6 +26,7 @@ export const AGENT_MODELS: AgentModel[] = [
     description: "Most capable — best for multi-step work with tools.",
     effort: "medium",
     fallbacks: true,
+  pricing: { input: 4, output: 20 },
   },
   {
     id: "claude-sonnet-5-5",
@@ -32,26 +35,37 @@ export const AGENT_MODELS: AgentModel[] = [
     description: "Fast and capable for everyday agents.",
     effort: "medium",
     fallbacks: true,
+  pricing: { input: 2, output: 10 },
   },
   {
     id: "claude-haiku-4-5",
     label: "Claude Haiku 4.5",
     provider: "anthropic",
     description: "Fastest and cheapest, for simple tasks.",
+  pricing: { input: 1, output: 5 },
   },
   {
     id: "llama3.2:3b",
     label: "Llama 3.2 3B (local)",
     provider: "ollama",
     description: "Free, runs on the local Ollama server. Weak at multi-step tool use.",
+  pricing: { input: 0, output: 0 },
   },
   {
     id: "llama3.2:1b",
     label: "Llama 3.2 1B (local)",
     provider: "ollama",
     description: "Smallest local model, for quick tests.",
+  pricing: { input: 0, output: 0 },
   },
 ];
+
+/** Estimated USD cost of a run's tokens (standard rates; excludes caching and web search fees). */
+export function estimateCostUsd(modelId: string, inputTokens: number, outputTokens: number) {
+  const pricing = findModel(modelId)?.pricing;
+  if (!pricing) return 0;
+  return (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
+}
 
 export function findModel(id: string): AgentModel | undefined {
   return AGENT_MODELS.find((m) => m.id === id);

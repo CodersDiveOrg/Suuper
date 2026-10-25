@@ -233,6 +233,41 @@ and error are stored on the `WorkflowRun` as it finishes.
 | `GET /businesses/current/workflows/:id/runs/:runId` | `workflows:read` | One run |
 | `POST /hooks/workflows/:webhookKey` | — (key in URL) | Start a webhook workflow; the JSON body becomes `{{trigger.…}}` |
 
+## Apps API (via `api-gateway`, served by `bot-service`)
+
+Apps are small business apps (Ticket Manager, CRM & Leads, Appointments & Bookings, Expense
+Tracker) run by one engine from a definition: record types and fields, views (table, board,
+calendar), dashboard widgets, public forms and automations. Templates live in
+`apps/bot-service/src/apps/templates/`; the engine (filters, dashboard maths, record rules such as
+SLA due times and completion stamps) in `apps/bot-service/src/apps/engine/`. Dashboards are
+computed on the server in the viewer's timezone (`?tz=` minutes east of UTC).
+
+AI is a helper, not the app: "Ask AI" answers from the dashboard's numbers, matching records and
+the knowledge bases linked in the app's settings; choice fields can be suggested; records have
+actions like "Draft a reply". It uses Claude Haiku when an Anthropic key exists, else the local
+model. Automations run a workflow (Slack, email, WhatsApp…) when a record is created or changes.
+
+| Method & path | Auth | Purpose |
+|---|---|---|
+| `GET /businesses/current/apps/catalog` | `apps:read` | Templates with setup questions and their definition |
+| `GET /businesses/current/apps/catalog/:key/preview` | `apps:read` | A template's dashboard and records on sample data (nothing stored) |
+| `POST /businesses/current/apps/suggest` | `apps:write` | `{ description }` -> best template + setup answers (AI App Builder) |
+| `POST /businesses/current/apps` | `apps:write` | `{ templateKey, answers, look?, sampleData? }` — install |
+| `GET/PATCH/DELETE /businesses/current/apps/:id` | read / write | App; PATCH takes look, `status` (public page on/off), `settings`, `fieldOptions`, `publicForms`, `automations` |
+| `DELETE /businesses/current/apps/:id/samples` | `apps:write` | Remove the sample records added at install |
+| `GET /businesses/current/apps/:id/dashboard` | `apps:read` | Computed widgets |
+| `GET /businesses/current/apps/:id/members` | `apps:read` | People records can be assigned to |
+| `GET /businesses/current/apps/:id/records` | `apps:read` | `?entity=` or `?view=` (its filters and sort), `?q=` search |
+| `POST /businesses/current/apps/:id/records` | `apps:records` | `{ entity, data }` |
+| `PATCH/DELETE /businesses/current/apps/:id/records/:recordId` | `apps:records` | `{ data }` with only the changed fields |
+| `GET /businesses/current/apps/:id/records/:recordId/activity` | `apps:read` | Timeline: created, changes, comments |
+| `POST /businesses/current/apps/:id/records/:recordId/comments` | `apps:records` | `{ text }` |
+| `POST /businesses/current/apps/:id/ai/ask` | `apps:read` | `{ question, tz }` -> `{ answer }` |
+| `POST /businesses/current/apps/:id/ai/suggest` | `apps:records` | `{ entity, field, data }` -> `{ value }` |
+| `POST /businesses/current/apps/:id/records/:recordId/ai/:action` | `apps:records` | -> `{ text }` |
+| `GET /public/apps/:slug` | — | Enabled public forms of a live app (60/min per app) |
+| `POST /public/apps/:slug/forms/:formKey` | — | `{ data }` — only the form's fields; returns the record `reference` (10/min per app) |
+
 ## Repo layout
 
 ```

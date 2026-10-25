@@ -30,6 +30,12 @@ export class AgentsController {
     return this.agentsService.models(request.businessContext.businessId);
   }
 
+  @Get("templates")
+  @RequirePermission("agents:read")
+  templates() {
+    return this.agentsService.templates();
+  }
+
   @Get("tools")
   @RequirePermission("agents:read")
   tools() {
