@@ -45,6 +45,7 @@ model Business {
   usageEvents            UsageEvent[]
   auditEvents            AuditEvent[]
   botChannels            BotChannel[]
+  apiKeys                ApiKey[]
 }
 
 // A user is a single global account. The same user can belong to many
@@ -792,4 +793,25 @@ model AuditEvent {
   @@index([businessId, createdAt])
   @@index([businessId, resourceType, createdAt])
   @@index([businessId, actorId, createdAt])
+}
+
+// A business API key for calling the API from scripts and servers. Only the
+// sha256 of the key is stored; the raw key is shown once, at creation. A key
+// acts as the member who created it, limited to its own permissions — and to
+// whatever that member can still do (see BusinessContextGuard).
+model ApiKey {
+  id              String    @id @default(uuid())
+  businessId      String
+  business        Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  name            String
+  prefix          String
+  keyHash         String    @unique
+  permissions     String[]
+  createdByUserId String
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([businessId])
 }

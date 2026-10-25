@@ -6,6 +6,7 @@ import {
 } from "@nestjs/common";
 import type { BusinessContext, UserContext } from "@platform/shared-types";
 import { verifyBusinessToken, verifyUserToken } from "./jwt";
+import { isApiKey, resolveApiKey } from "./api-key";
 
 function bearer(request: { headers: Record<string, string | undefined> }): string {
   const header = request.headers["authorization"];
@@ -16,16 +17,25 @@ function bearer(request: { headers: Record<string, string | undefined> }): strin
 }
 
 /**
- * Requires a business-scoped JWT and attaches a BusinessContext to the request.
- * Every route that acts inside a business uses this; the business id always
- * comes from the token, never from the client.
+ * Requires a business-scoped JWT or a business API key and attaches a
+ * BusinessContext to the request. Every route that acts inside a business
+ * uses this; the business id always comes from the token, never from the client.
  */
 @Injectable()
 export class BusinessContextGuard implements CanActivate {
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
+    const token = bearer(request);
+
+    if (isApiKey(token)) {
+      const ctx = await resolveApiKey(token);
+      if (!ctx) throw new UnauthorizedException("Invalid, expired or revoked API key");
+      request.businessContext = ctx;
+      return true;
+    }
+
     try {
-      const payload = verifyBusinessToken(bearer(request));
+      const payload = verifyBusinessToken(token);
       const ctx: BusinessContext = {
         userId: payload.userId,
         businessId: payload.businessId,

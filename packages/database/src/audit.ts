@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { prisma } from "./client";
 
 // The audit log: who changed what in a business. Each service mounts
@@ -13,7 +14,7 @@ interface AuditRequest {
   headers: Record<string, string | string[] | undefined>;
   body?: unknown;
   ip?: string;
-  businessContext?: { businessId: string; userId: string };
+  businessContext?: { businessId: string; userId: string; apiKeyId?: string };
 }
 interface AuditResponse {
   statusCode: number;
@@ -67,6 +68,7 @@ const RESOURCES: Record<string, ResourceDef> = {
       return user ? user.name || user.email : undefined;
     },
   },
+  "api-keys": { type: "api_key", lookup: async (id) => (await prisma.apiKey.findUnique({ where: { id }, select: { name: true } }))?.name },
   invitations: { type: "invitation", lookup: async (id) => (await prisma.invitation.findUnique({ where: { id }, select: { email: true } }))?.email },
   roles: {
     type: "role",
@@ -155,7 +157,7 @@ export function describeRequest(method: string, url: string): AuditTarget | null
   if (sub) {
     verb = SUB_ACTIONS[sub] ?? sub.replace(/[^a-z0-9]+/gi, "_");
   } else if (method === "DELETE") {
-    verb = { member: "removed", invitation: "revoked", integration: "disconnected", channel: "removed" }[type] ?? "deleted";
+    verb = { member: "removed", invitation: "revoked", integration: "disconnected", channel: "removed", api_key: "revoked" }[type] ?? "deleted";
   } else if (method === "POST" && !id) {
     verb = type === "invitation" ? "sent" : "created";
   } else {
@@ -179,9 +181,17 @@ function detailsFrom(method: string, body: unknown): Record<string, unknown> | u
   return Object.keys(values).length ? { changed, values } : { changed };
 }
 
-/** The business in a bearer token, without verifying it (the service's guard does that). */
-function peekBusinessId(authorization: string | string[] | undefined): string | undefined {
+/**
+ * The business a bearer token acts in, without verifying it (the service's
+ * guard does that). Business API keys ("sk_live_…", see shared-auth api-key.ts)
+ * carry nothing readable, so they're looked up by hash.
+ */
+async function peekBusinessId(authorization: string | string[] | undefined): Promise<string | undefined> {
   const token = typeof authorization === "string" ? authorization.replace(/^Bearer\s+/i, "") : "";
+  if (token.startsWith("sk_live_")) {
+    const keyHash = createHash("sha256").update(token).digest("hex");
+    return (await prisma.apiKey.findUnique({ where: { keyHash }, select: { businessId: true } }))?.businessId;
+  }
   const payload = token.split(".")[1];
   if (!payload) return undefined;
   try {
@@ -255,9 +265,13 @@ export function requestOrigin(req: Pick<AuditRequest, "headers" | "ip">) {
 export function auditMiddleware(req: AuditRequest, res: AuditResponse, next: () => void) {
   if (!MUTATING.has(req.method)) return next();
   const target = describeRequest(req.method, req.originalUrl);
-  const businessId = target ? peekBusinessId(req.headers.authorization) : undefined;
-  if (!target || !businessId) return next();
+  if (!target) return next();
+  void peekBusinessId(req.headers.authorization)
+    .catch(() => undefined)
+    .then((businessId) => (businessId ? track(req, res, next, target, businessId) : next()));
+}
 
+function track(req: AuditRequest, res: AuditResponse, next: () => void, target: AuditTarget, businessId: string) {
   let responseBody: unknown;
   const json = res.json.bind(res);
   res.json = (body: unknown) => {
@@ -268,11 +282,13 @@ export function auditMiddleware(req: AuditRequest, res: AuditResponse, next: () 
   const lookup = target.lookup && target.resourceId ? target.lookup(target.resourceId, businessId).catch(() => undefined) : Promise.resolve(undefined);
 
   void lookup.then((nameBefore) => {
-    res.on("finish", () => {
+    res.on("finish", async () => {
       const ctx = req.businessContext;
       if (res.statusCode >= 400 || !ctx || ctx.businessId !== businessId) return;
       // Read here, not up front: this middleware runs before Nest's body parser.
-      const details = detailsFrom(req.method, req.body);
+      let details = detailsFrom(req.method, req.body);
+      // Done with an API key: still the key creator's action, but say which key.
+      if (ctx.apiKeyId) details = { ...details, apiKeyId: ctx.apiKeyId, apiKeyName: await apiKeyName(ctx.apiKeyId) };
       const created = nameFromBody(responseBody);
       const id = target.resourceId ?? (responseBody && typeof responseBody === "object" ? ((responseBody as { id?: unknown }).id as string | undefined) : undefined);
       void recordAuditEvent({
@@ -288,4 +304,8 @@ export function auditMiddleware(req: AuditRequest, res: AuditResponse, next: () 
     });
     next();
   });
+}
+
+async function apiKeyName(id: string) {
+  return (await prisma.apiKey.findUnique({ where: { id }, select: { name: true } }).catch(() => null))?.name;
 }

@@ -83,6 +83,8 @@ export interface BusinessContext {
   businessId: BusinessId;
   role: BusinessRole;
   permissions: Permission[];
+  /** Set when the request came in with an API key instead of a session token. */
+  apiKeyId?: string;
 }
 
 /** Attached to requests authenticated as a user but not yet scoped to a business. */
@@ -119,7 +121,8 @@ export type Permission =
   | "integrations:write"
   | "webhooks:read"
   | "webhooks:write"
-  | "audit:read";
+  | "audit:read"
+  | "apikeys:manage";
 
 export const ALL_PERMISSIONS: Permission[] = [
   "business:read",
@@ -149,6 +152,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   "webhooks:read",
   "webhooks:write",
   "audit:read",
+  "apikeys:manage",
 ];
 
 export function isPermission(value: string): value is Permission {
@@ -189,6 +193,7 @@ const ROLE_PERMISSIONS: Record<BuiltInRole, Permission[]> = {
     "webhooks:read",
     "webhooks:write",
     "audit:read",
+    "apikeys:manage",
   ],
   member: [
     "business:read",
@@ -243,4 +248,24 @@ export interface RoleDto {
 
 export function roleHasPermission(role: BusinessRole, permission: Permission): boolean {
   return permissionsForRole(role).includes(permission);
+}
+
+/**
+ * A business API key as listed. The secret itself is only returned once, from
+ * the create call (ApiKeyCreatedDto.key); afterwards only its prefix is known.
+ */
+export interface ApiKeyDto {
+  id: string;
+  name: string;
+  /** First characters of the key, for telling keys apart (e.g. "sk_live_a1b2"). */
+  prefix: string;
+  permissions: Permission[];
+  createdBy: { userId: string; email?: string; name?: string };
+  lastUsedAt?: string;
+  expiresAt?: string;
+  createdAt: string;
+}
+
+export interface ApiKeyCreatedDto extends ApiKeyDto {
+  key: string;
 }

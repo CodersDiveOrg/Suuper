@@ -30,6 +30,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   member: "member",
   invitation: "invitation",
   role: "role",
+  api_key: "API key",
   integration: "integration",
   channel: "channel",
   plan: "plan",

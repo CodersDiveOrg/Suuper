@@ -10,6 +10,7 @@ import { IntegrationsModule } from "./integrations/integrations.module";
 import { OnboardingModule } from "./onboarding/onboarding.module";
 import { AuditLogModule } from "./audit-log/audit-log.module";
 
+import { ApiKeysModule } from "./api-keys/api-keys.module";
 @Module({
   imports: [
     MailModule,
@@ -21,6 +22,7 @@ import { AuditLogModule } from "./audit-log/audit-log.module";
     IntegrationsModule,
     OnboardingModule,
     AuditLogModule,
+    ApiKeysModule,
   ],
   controllers: [HealthController],
 })
