@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { prisma } from "@platform/database";
+import { brandForBusiness, prisma } from "@platform/database";
 import { loadServiceConfig } from "@platform/shared-config";
 import type { App, AppDefinition, AppInstallRequest, AppSettings, AppUpdateInput, AppWidgetResult, PublicApp } from "@platform/shared-types";
 import { computeWidget } from "./engine/dashboard";
@@ -286,6 +286,8 @@ export class AppsService {
       }
       forms.push({ key: form.key, title: form.title, description: form.description, buttonLabel: form.buttonLabel, fields });
     }
+    // Agency clients show the agency's brand, or nothing when it hides the line.
+    const brand = await brandForBusiness(app.businessId);
     return {
       slug: app.slug,
       name: app.name,
@@ -293,7 +295,8 @@ export class AppsService {
       icon: app.icon,
       color: app.color,
       forms,
-      showPoweredBy: (app.settings as unknown as AppSettings).showPoweredBy !== false,
+      showPoweredBy: (app.settings as unknown as AppSettings).showPoweredBy !== false && !brand.hidePoweredBy,
+      poweredBy: { name: brand.name, url: brand.agencyId ? (brand.customDomain ? `https://${brand.customDomain}` : null) : "https://suuper.cc" },
     };
   }
 

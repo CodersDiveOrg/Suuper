@@ -35,7 +35,7 @@ export class BusinessesController {
   @Get("current")
   @UseGuards(BusinessContextGuard)
   async current(@Req() request: { businessContext: BusinessContext }) {
-    const { businessId, role } = request.businessContext;
-    return this.businessesService.current(businessId, role);
+    const { businessId, role, userId } = request.businessContext;
+    return this.businessesService.current(businessId, role, userId);
   }
 }

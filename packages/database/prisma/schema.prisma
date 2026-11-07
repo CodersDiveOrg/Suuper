@@ -29,6 +29,10 @@ model Business {
   plan                   String                  @default("starter")
   // Model new bots, agents, app AI and workflow steps start with (Settings → AI Models).
   defaultModel           String?
+  // Set when an agency created and manages this business (its client). The
+  // agency's staff can open it without a membership, and its brand applies.
+  agencyId               String?
+  agency                 Agency?                 @relation(fields: [agencyId], references: [id], onDelete: SetNull)
   memberships            Membership[]
   roles                  Role[]
   integrationConnections IntegrationConnection[]
@@ -49,6 +53,8 @@ model Business {
   botChannels            BotChannel[]
   apiKeys                ApiKey[]
   billingAccount         BillingAccount?
+
+  @@index([agencyId])
 }
 
 // A user is a single global account. The same user can belong to many
@@ -61,6 +67,7 @@ model User {
   createdAt       DateTime         @default(now())
   memberships     Membership[]
   loginChallenges LoginChallenge[]
+  agencyMembers   AgencyMember[]
 }
 
 // Second login step: after the password checks out, a short code is emailed
@@ -70,6 +77,8 @@ model LoginChallenge {
   userId     String
   user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   codeHash   String
+  /// "login" (second sign-in step) or "password_reset"; a code only works for its own purpose.
+  purpose    String    @default("login")
   attempts   Int       @default(0)
   expiresAt  DateTime
   lastSentAt DateTime  @default(now())
@@ -843,4 +852,50 @@ model BillingAccount {
   billingEmail         String?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @default(now()) @updatedAt
+}
+
+// An agency resells the platform white-labelled to its own clients: each
+// client is a Business with agencyId set. The agency's brand (name, logo,
+// colour, custom domain, email sender) replaces the platform's for everyone
+// in those businesses. Agency plans (shared-types/agency.ts) cap client count.
+model Agency {
+  id               String         @id @default(uuid())
+  name             String
+  slug             String         @unique
+  plan             String         @default("agency_starter")
+  brandName        String?
+  logoUrl          String?
+  // Hex, e.g. "#4f46e5".
+  primaryColor     String?
+  supportEmail     String?
+  // Hide "Powered by Suuper" on client apps and widgets.
+  hidePoweredBy    Boolean        @default(false)
+  // Display name and reply-to on emails sent to the agency's clients. The
+  // address itself stays the platform's SMTP sender.
+  emailFromName    String?
+  emailReplyTo     String?
+  // e.g. "app.youragency.com", CNAMEd to the platform. Brand applies on it
+  // once verified by a TXT record holding domainToken.
+  customDomain     String?        @unique
+  domainToken      String         @default(uuid())
+  domainVerifiedAt DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @default(now()) @updatedAt
+  members          AgencyMember[]
+  businesses       Business[]
+}
+
+// Agency staff: owner | admin. Both can manage clients and open their
+// workspaces (as owner / admin); only owners change branding, domain, plan and team.
+model AgencyMember {
+  id        String   @id @default(uuid())
+  agencyId  String
+  agency    Agency   @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String   @default("admin")
+  createdAt DateTime @default(now())
+
+  @@unique([agencyId, userId])
+  @@index([userId])
 }

@@ -42,14 +42,18 @@ export async function resolveApiKey(key: string): Promise<BusinessContext | null
   const membership = await prisma.membership.findUnique({
     where: { userId_businessId: { userId: row.createdByUserId, businessId: row.businessId } },
   });
-  if (!membership) return null;
+  // Agency staff act in their clients' businesses without a membership (see
+  // identity-service AuthService.agencyAccess): owners as owner, admins as admin.
+  const agencyRole = membership ? null : await agencyStaffRole(row.createdByUserId, row.businessId);
+  if (!membership && !agencyRole) return null;
+  const roleKey = membership?.role ?? agencyRole!;
 
   let held: Permission[];
-  if (isBuiltInRole(membership.role)) {
-    held = permissionsForRole(membership.role);
+  if (isBuiltInRole(roleKey)) {
+    held = permissionsForRole(roleKey);
   } else {
     const role = await prisma.role.findUnique({
-      where: { businessId_key: { businessId: row.businessId, key: membership.role } },
+      where: { businessId_key: { businessId: row.businessId, key: roleKey } },
     });
     held = (role?.permissions ?? []).filter(isPermission);
   }
@@ -62,8 +66,15 @@ export async function resolveApiKey(key: string): Promise<BusinessContext | null
   return {
     userId: row.createdByUserId,
     businessId: row.businessId,
-    role: membership.role,
+    role: roleKey,
     permissions: row.permissions.filter((p): p is Permission => isPermission(p) && heldSet.has(p)),
     apiKeyId: row.id,
   };
+}
+
+async function agencyStaffRole(userId: string, businessId: string): Promise<"owner" | "admin" | null> {
+  const business = await prisma.business.findUnique({ where: { id: businessId }, select: { agencyId: true } });
+  if (!business?.agencyId) return null;
+  const staff = await prisma.agencyMember.findUnique({ where: { agencyId_userId: { agencyId: business.agencyId, userId } } });
+  return staff ? (staff.role === "owner" ? "owner" : "admin") : null;
 }

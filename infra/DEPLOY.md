@@ -63,3 +63,35 @@ docker compose -f infra/docker-compose.prod.yml --env-file .env logs -f api-gate
 ```
 If a service is OOM-killed (`docker inspect <c> --format '{{.State.OOMKilled}}'`), raise its
 `mem_limit` a little rather than removing it.
+
+## Agency custom domains (white-label)
+
+Agencies on Agency Growth/Scale can serve the dashboard on their own domain. They add two
+DNS records (shown on their agency's Domain tab) and click Verify:
+- `CNAME app.theiragency.com → app.suuper.cc`
+- `TXT _suuper-verify.app.theiragency.com → suuper-verify=<token>`
+
+`infra/custom-domains.sh` then issues a certificate and writes an nginx block for each
+verified domain (and removes blocks for domains that were removed). Install it once:
+```sh
+mkdir -p /var/www/letsencrypt
+crontab -e
+# */5 * * * * /opt/suuper/ai-automation-platform/infra/custom-domains.sh >> /var/log/suuper-domains.log 2>&1
+```
+The web app calls the API on whichever domain it's served from (`/api`), so no CORS
+setup is needed per domain.
+
+## Sign in with Google
+
+Uses the OAuth **Web application** client in Google Cloud Console (Google Auth Platform → Clients).
+Only the client ID is needed; the client secret is not used.
+
+- Server `.env`: `GOOGLE_CLIENT_ID=<client id>` (already filled in `production.env.example`).
+  On an existing server, add the line to `.env` and run `./infra/deploy.sh`.
+- Web image: the workflow passes `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (repo variable, defaulting to the
+  same client ID). Leave both empty to hide the button.
+- Google Cloud → the client → **Authorized JavaScript origins** must list every address the app is
+  opened on: `https://app.suuper.cc`, `http://localhost:3200` for development, and each agency
+  custom domain (Google has no wildcards; without it the button fails on that domain only).
+- Google Auth Platform → Audience: **Publish app** so any Google account can sign in, not just
+  test users.

@@ -332,4 +332,6 @@ export interface PublicApp {
   color: string;
   forms: PublicAppForm[];
   showPoweredBy: boolean;
+  /** Name in the "Powered by" line: the platform's, or the managing agency's brand. */
+  poweredBy: { name: string; url: string | null };
 }

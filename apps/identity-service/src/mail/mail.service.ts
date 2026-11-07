@@ -6,6 +6,9 @@ export interface MailMessage {
   subject: string;
   text: string;
   html?: string;
+  /** Shown as the sender's name (an agency's brand); the address stays MAIL_FROM. */
+  fromName?: string;
+  replyTo?: string;
 }
 
 /**
@@ -38,6 +41,11 @@ export class MailService {
     if (!host) this.logger.warn("SMTP_HOST not set — emails will be printed to the console, not sent");
   }
 
+  /** The bare address in MAIL_FROM ("Name <a@b.c>" -> "a@b.c"). */
+  private fromAddress() {
+    return this.from.match(/<([^>]+)>/)?.[1] ?? this.from;
+  }
+
   async send(message: MailMessage) {
     if (!this.transporter || this.logAll) {
       this.logger.log(`[mail] to=${message.to} subject="${message.subject}"\n${message.text}`);
@@ -45,7 +53,12 @@ export class MailService {
     if (!this.transporter) return;
 
     try {
-      await this.transporter.sendMail({ from: this.from, ...message });
+      const { fromName, replyTo, ...rest } = message;
+      await this.transporter.sendMail({
+        ...rest,
+        from: fromName ? { name: fromName, address: this.fromAddress() } : this.from,
+        ...(replyTo ? { replyTo } : {}),
+      });
     } catch (err) {
       this.logger.error(`Failed to send "${message.subject}" to ${message.to}: ${(err as Error).message}`);
       if (!this.logAll) throw new ServiceUnavailableException("Couldn't send email. Try again in a moment.");
