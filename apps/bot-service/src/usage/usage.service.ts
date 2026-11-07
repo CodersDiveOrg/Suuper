@@ -33,6 +33,8 @@ export class UsageService {
   async setPlan(businessId: string, plan: unknown) {
     if (billingConfigured()) throw new BadRequestException("Plans are changed under Settings → Billing");
     if (!isPlanKey(plan)) throw new BadRequestException(`plan must be one of: ${PLANS.map((p) => p.key).join(", ")}`);
+    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { agency: { select: { name: true } } } });
+    if (business?.agency) throw new BadRequestException(`${business.agency.name} manages this workspace's plan. Contact them to change it.`);
     await prisma.business.update({ where: { id: businessId }, data: { plan } });
     return this.summary(businessId);
   }

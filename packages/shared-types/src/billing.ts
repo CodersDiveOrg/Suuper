@@ -30,6 +30,8 @@ export interface BillingOverview {
   /** Stripe is set up on this server. When false, plan changes apply immediately without payment. */
   configured: boolean;
   plan: PlanKey;
+  /** Set for an agency's client: the agency pays and sets the plan, so checkout is off. */
+  managedBy: { name: string } | null;
   subscription: BillingSubscription | null;
   billingEmail?: string;
   /** Owners only (business:manage); empty for everyone else. */

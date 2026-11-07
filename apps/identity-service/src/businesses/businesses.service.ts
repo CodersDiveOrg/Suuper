@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { prisma } from "@platform/database";
+import { brandOfAgency, prisma } from "@platform/database";
 import type { BusinessRole } from "@platform/shared-types";
 import { RolesService } from "../roles/roles.service";
 
@@ -34,7 +34,7 @@ export class BusinessesService {
     };
   }
 
-  private async uniqueSlug(name: string): Promise<string> {
+  async uniqueSlug(name: string): Promise<string> {
     const base =
       name
         .toLowerCase()
@@ -68,10 +68,10 @@ export class BusinessesService {
   }
 
   /** Details of the business the caller is currently acting in. */
-  async current(businessId: string, role: BusinessRole) {
+  async current(businessId: string, role: BusinessRole, userId?: string) {
     const business = await prisma.business.findUnique({
       where: { id: businessId },
-      include: { _count: { select: { memberships: true } } },
+      include: { _count: { select: { memberships: true } }, agency: true },
     });
     if (!business) {
       throw new NotFoundException("Business not found");
@@ -86,6 +86,18 @@ export class BusinessesService {
       memberCount: business._count.memberships,
       role,
       permissions: await this.rolesService.resolvePermissions(businessId, role),
+      // The agency managing this business, and whether the caller is on its
+      // team (they get "Back to agency"; the client's own members don't).
+      agency: business.agency
+        ? {
+            id: business.agency.id,
+            name: business.agency.name,
+            isStaff: userId
+              ? !!(await prisma.agencyMember.findUnique({ where: { agencyId_userId: { agencyId: business.agency.id, userId } } }))
+              : false,
+          }
+        : null,
+      brand: (({ customDomain, emailFromName, emailReplyTo, ...brand }) => brand)(brandOfAgency(business.agency)),
     };
   }
 }

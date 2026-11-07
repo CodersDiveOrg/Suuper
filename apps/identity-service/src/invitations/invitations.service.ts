@@ -10,7 +10,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import bcrypt from "bcryptjs";
-import { memberSeats, prisma, recordAuditEvent } from "@platform/database";
+import { brandForBusiness, memberSeats, prisma, recordAuditEvent, webAppUrlFor } from "@platform/database";
 import { planFor, quotaExceededBody } from "@platform/shared-types";
 import { signUserToken } from "@platform/shared-auth";
 import type { BusinessRole } from "@platform/shared-types";
@@ -261,10 +261,11 @@ export class InvitationsService {
 
   /** Returns whether the email went out; a failed send leaves the invite in place to Resend. */
   private async sendInvitationEmail(invitation: InvitationRow, token: string) {
-    const [business, inviter, roleNames] = await Promise.all([
+    const [business, inviter, roleNames, brand] = await Promise.all([
       prisma.business.findUniqueOrThrow({ where: { id: invitation.businessId }, select: { name: true } }),
       prisma.user.findUnique({ where: { id: invitation.invitedByUserId }, select: { name: true, email: true } }),
       this.rolesService.roleNames(invitation.businessId),
+      brandForBusiness(invitation.businessId),
     ]);
     try {
       await this.mailService.send(
@@ -273,8 +274,9 @@ export class InvitationsService {
           businessName: business.name,
           inviterName: inviter?.name ?? inviter?.email ?? "A teammate",
           roleName: roleNames.get(invitation.role) ?? invitation.role,
-          acceptUrl: `${webAppUrl()}/invite/${token}`,
+          acceptUrl: `${webAppUrlFor(brand, webAppUrl())}/invite/${token}`,
           expiresInDays: INVITE_TTL_DAYS,
+          brand,
         }),
       );
       return true;

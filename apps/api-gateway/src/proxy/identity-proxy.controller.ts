@@ -36,3 +36,20 @@ export class InvitationsProxyController {
     return forwardTo(identityServiceUrl, req);
   }
 }
+
+@Controller("agencies")
+export class AgenciesProxyController {
+  @All(["", "*"])
+  handle(@Req() req: Request) {
+    return forwardTo(identityServiceUrl, req);
+  }
+}
+
+// Public: which brand to show on a host (custom agency domains).
+@Controller("branding")
+export class BrandingProxyController {
+  @All(["", "*"])
+  handle(@Req() req: Request) {
+    return forwardTo(identityServiceUrl, req);
+  }
+}

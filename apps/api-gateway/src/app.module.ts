@@ -1,7 +1,9 @@
 import { Module } from "@nestjs/common";
 import { HealthController } from "./health/health.controller";
 import {
+  AgenciesProxyController,
   AuthProxyController,
+  BrandingProxyController,
   BusinessesProxyController,
   InvitationsProxyController,
 } from "./proxy/identity-proxy.controller";
@@ -61,6 +63,8 @@ import { AppsProxyController, PublicAppsProxyController } from "./proxy/app-prox
     HostedMcpProxyController,
     BusinessesProxyController,
     InvitationsProxyController,
+    AgenciesProxyController,
+    BrandingProxyController,
   ],
 })
 export class AppModule {}

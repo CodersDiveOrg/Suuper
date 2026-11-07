@@ -31,13 +31,14 @@ export class BillingService {
 
   async overview(ctx: BusinessContext): Promise<BillingOverview> {
     const [business, account] = await Promise.all([
-      prisma.business.findUniqueOrThrow({ where: { id: ctx.businessId }, select: { plan: true } }),
+      prisma.business.findUniqueOrThrow({ where: { id: ctx.businessId }, select: { plan: true, agency: { select: { name: true } } } }),
       prisma.billingAccount.findUnique({ where: { businessId: ctx.businessId } }),
     ]);
     const canManage = ctx.permissions.includes("business:manage");
     return {
       configured: billingConfigured(),
       plan: planFor(business.plan).key,
+      managedBy: business.agency ? { name: business.agency.name } : null,
       subscription:
         account?.stripeSubscriptionId && account.status
           ? {
@@ -58,6 +59,7 @@ export class BillingService {
    */
   async checkout(ctx: BusinessContext, plan: unknown): Promise<BillingCheckoutResult> {
     this.requireConfigured();
+    await this.requireSelfBilled(ctx.businessId);
     if (!isPlanKey(plan)) throw new BadRequestException("plan must be starter, growth or pro");
     const account = await this.ensureCustomer(ctx);
 
@@ -272,6 +274,12 @@ export class BillingService {
       this.logger.warn(`Couldn't list invoices for ${customerId}: ${stripeError(err)}`);
       return [];
     }
+  }
+
+  /** Agency clients are billed through their agency, which also sets their plan. */
+  private async requireSelfBilled(businessId: string) {
+    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { agency: { select: { name: true } } } });
+    if (business?.agency) throw new BadRequestException(`${business.agency.name} manages this workspace's plan. Contact them to change it.`);
   }
 
   private requireConfigured() {
