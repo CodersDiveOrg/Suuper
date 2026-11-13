@@ -1,7 +1,8 @@
-import type { PlanKey } from "./plans";
+import type { PlanGrantSummary, PlanKey } from "./plans";
 
 // Settings → Billing (GET /businesses/current/billing). Payments run through
-// Stripe; without Stripe keys on the server, plan changes apply directly.
+// Stripe; without Stripe keys on the server, the Suuper team grants plans from
+// the admin panel and customers can't change the plan themselves.
 
 export interface BillingSubscription {
   /** Stripe status: trialing | active | past_due | unpaid | canceled | incomplete | incomplete_expired | paused */
@@ -27,7 +28,7 @@ export interface BillingInvoice {
 }
 
 export interface BillingOverview {
-  /** Stripe is set up on this server. When false, plan changes apply immediately without payment. */
+  /** Stripe is set up on this server. When false, plans are granted by the Suuper team (no self-serve changes). */
   configured: boolean;
   plan: PlanKey;
   /** Set for an agency's client: the agency pays and sets the plan, so checkout is off. */
@@ -36,6 +37,8 @@ export interface BillingOverview {
   billingEmail?: string;
   /** Owners only (business:manage); empty for everyone else. */
   invoices: BillingInvoice[];
+  /** A plan given by the Suuper team (trial, paid manually, free), while it lasts. */
+  grant: PlanGrantSummary | null;
 }
 
 /** POST /billing/checkout: a Stripe Checkout URL for a first subscription, or the updated overview after a plan switch. */

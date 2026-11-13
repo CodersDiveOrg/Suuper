@@ -10,8 +10,8 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import bcrypt from "bcryptjs";
-import { brandForBusiness, memberSeats, prisma, recordAuditEvent, webAppUrlFor } from "@platform/database";
-import { planFor, quotaExceededBody } from "@platform/shared-types";
+import { brandForBusiness, effectivePlan, memberSeats, prisma, recordAuditEvent, webAppUrlFor } from "@platform/database";
+import { quotaExceededBody } from "@platform/shared-types";
 import { signUserToken } from "@platform/shared-auth";
 import type { BusinessRole } from "@platform/shared-types";
 import { RolesService, type RoleActor } from "../roles/roles.service";
@@ -79,8 +79,7 @@ export class InvitationsService {
     }
 
     // Pending invitations hold a seat, so the plan's member limit counts them.
-    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { plan: true } });
-    const plan = planFor(business?.plan);
+    const plan = await effectivePlan(businessId);
     if ((await memberSeats(businessId)) >= plan.limits.members) {
       throw new HttpException(quotaExceededBody("members", plan), HttpStatus.PAYMENT_REQUIRED);
     }

@@ -53,6 +53,7 @@ model Business {
   botChannels            BotChannel[]
   apiKeys                ApiKey[]
   billingAccount         BillingAccount?
+  planGrants             PlanGrant[]
 
   @@index([agencyId])
 }
@@ -898,4 +899,59 @@ model AgencyMember {
 
   @@unique([agencyId, userId])
   @@index([userId])
+}
+
+// A plan workspaces can be on (Business.plan holds its key). Managed in the
+// admin panel; seeded with the original Starter / Growth / Pro. Limits use the
+// usage meter keys in shared-types plans.ts.
+model Plan {
+  key           String   @id
+  name          String
+  description   String   @default("")
+  priceUsd      Float    @default(0)
+  // Billing period the price is for: month | year.
+  interval      String   @default("month")
+  // Record<UsageMeterKey, number>.
+  limits        Json
+  // Free days before the first charge when subscribing through Stripe.
+  trialDays     Int      @default(0)
+  // Shown on the billing page for customers to pick. Hidden plans can still be granted.
+  isPublic      Boolean  @default(true)
+  // Where workspaces land when they sign up or a subscription or grant ends. Exactly one.
+  isDefault     Boolean  @default(false)
+  // No new subscriptions or grants; workspaces already on it keep it.
+  archived      Boolean  @default(false)
+  sortOrder     Int      @default(0)
+  // The Stripe price customers are charged; null until Stripe is set up for this plan.
+  stripePriceId String?  @unique
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+}
+
+// A plan given to a workspace by the Suuper team instead of through Stripe:
+// a trial, a manually paid period (bank transfer, cash) or a free one. While
+// active it sets Business.plan; when endsAt passes the workspace drops to the
+// default plan (see @platform/database plans.ts effectivePlan).
+model PlanGrant {
+  id         String    @id @default(uuid())
+  businessId String
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  planKey    String
+  // trial | paid | free
+  kind       String
+  // What the customer paid for this period (kind "paid"), in USD.
+  amountUsd  Float?
+  note       String?
+  startsAt   DateTime  @default(now())
+  // Null: no end date.
+  endsAt     DateTime?
+  // Set when it expired, was revoked or replaced.
+  endedAt    DateTime?
+  // expired | revoked | replaced | stripe
+  endReason  String?
+  grantedBy  String?
+  createdAt  DateTime  @default(now())
+
+  @@index([businessId, endedAt])
+  @@index([endsAt])
 }

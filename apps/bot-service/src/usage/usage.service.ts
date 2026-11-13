@@ -1,9 +1,7 @@
 import { BadRequestException, Injectable } from "@nestjs/common";
-import { prisma } from "@platform/database";
+import { prisma, publicPlans } from "@platform/database";
 import {
-  isPlanKey,
   monthBounds,
-  PLANS,
   USAGE_METERS,
   type UsageFeature,
   type UsageSummary,
@@ -25,18 +23,27 @@ interface DayRow {
 
 @Injectable()
 export class UsageService {
-  plans() {
-    return { plans: PLANS, meters: USAGE_METERS };
+  /** The plans customers can choose (public, not archived), from the Plan table. */
+  async plans() {
+    const plans = await publicPlans();
+    return {
+      plans: plans.map(({ key, name, description, priceUsd, interval, trialDays, limits }) => ({ key, name, description, priceUsd, interval, trialDays, limits })),
+      meters: USAGE_METERS,
+    };
   }
 
-  /** Changing the plan takes effect immediately. Only without Stripe: with it, plans change through Billing. */
-  async setPlan(businessId: string, plan: unknown) {
-    if (billingConfigured()) throw new BadRequestException("Plans are changed under Settings → Billing");
-    if (!isPlanKey(plan)) throw new BadRequestException(`plan must be one of: ${PLANS.map((p) => p.key).join(", ")}`);
+  /**
+   * Customers can't switch plans for free any more: with Stripe they subscribe
+   * under Settings → Billing, without it the Suuper team grants plans.
+   */
+  async setPlan(businessId: string, _plan: unknown) {
     const business = await prisma.business.findUnique({ where: { id: businessId }, select: { agency: { select: { name: true } } } });
     if (business?.agency) throw new BadRequestException(`${business.agency.name} manages this workspace's plan. Contact them to change it.`);
-    await prisma.business.update({ where: { id: businessId }, data: { plan } });
-    return this.summary(businessId);
+    throw new BadRequestException(
+      billingConfigured()
+        ? "Plans are changed under Settings → Billing"
+        : "Plan changes are handled by the Suuper team. Contact us to upgrade.",
+    );
   }
 
   /** `month` is "YYYY-MM" (UTC); defaults to the current month. */

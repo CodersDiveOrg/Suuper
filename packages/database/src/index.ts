@@ -4,3 +4,4 @@ export * from "./audit";
 
 export * from "@prisma/client";
 export * from "./brand";
+export * from "./plans";

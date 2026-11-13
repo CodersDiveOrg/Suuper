@@ -1,7 +1,7 @@
 import { BadRequestException, HttpException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
-import { knowledgeStorageBytes, prisma } from "@platform/database";
+import { effectivePlan, knowledgeStorageBytes, prisma } from "@platform/database";
 import { embed, toPgVector } from "@platform/shared-ai";
 import { assertPublicUrl } from "@platform/shared-auth";
 import { loadServiceConfig } from "@platform/shared-config";
@@ -9,7 +9,6 @@ import {
   INGEST_KNOWLEDGE_BASE_QUEUE,
   isKnowledgeAutoSync,
   nextAutoSync,
-  planFor,
   quotaExceededBody,
   type AddKnowledgeDocumentRequest,
   type FaqItem,
@@ -552,8 +551,7 @@ export class KnowledgeBasesService {
 
   /** New sources are refused once the plan's knowledge storage is used up (re-syncs still run). */
   private async assertStorageAvailable(businessId: string) {
-    const business = await prisma.business.findUnique({ where: { id: businessId }, select: { plan: true } });
-    const plan = planFor(business?.plan);
+    const plan = await effectivePlan(businessId);
     if ((await knowledgeStorageBytes(businessId)) >= plan.limits.knowledge_storage) {
       throw new HttpException(quotaExceededBody("knowledge_storage", plan), HttpStatus.PAYMENT_REQUIRED);
     }
