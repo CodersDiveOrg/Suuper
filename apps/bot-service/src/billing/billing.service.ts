@@ -1,16 +1,8 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from "@nestjs/common";
 import type Stripe from "stripe";
-import { prisma } from "@platform/database";
+import { activeGrant, defaultPlan, effectivePlan, endGrants, prisma, publicPlans, type PlanRecord } from "@platform/database";
 import { loadServiceConfig } from "@platform/shared-config";
-import {
-  isPlanKey,
-  planFor,
-  type BillingCheckoutResult,
-  type BillingInvoice,
-  type BillingOverview,
-  type BusinessContext,
-  type PlanKey,
-} from "@platform/shared-types";
+import { type BillingCheckoutResult, type BillingInvoice, type BillingOverview, type BusinessContext } from "@platform/shared-types";
 import { billingConfigured, planForPrice, priceFor, stripe } from "./stripe";
 
 const config = loadServiceConfig("bot-service", 3002);
@@ -30,14 +22,17 @@ export class BillingService {
   private readonly logger = new Logger(BillingService.name);
 
   async overview(ctx: BusinessContext): Promise<BillingOverview> {
-    const [business, account] = await Promise.all([
-      prisma.business.findUniqueOrThrow({ where: { id: ctx.businessId }, select: { plan: true, agency: { select: { name: true } } } }),
+    const [plan, business, account, grant] = await Promise.all([
+      effectivePlan(ctx.businessId),
+      prisma.business.findUniqueOrThrow({ where: { id: ctx.businessId }, select: { agency: { select: { name: true } } } }),
       prisma.billingAccount.findUnique({ where: { businessId: ctx.businessId } }),
+      activeGrant(ctx.businessId),
     ]);
     const canManage = ctx.permissions.includes("business:manage");
     return {
       configured: billingConfigured(),
-      plan: planFor(business.plan).key,
+      plan: plan.key,
+      grant,
       managedBy: business.agency ? { name: business.agency.name } : null,
       subscription:
         account?.stripeSubscriptionId && account.status
@@ -60,11 +55,13 @@ export class BillingService {
   async checkout(ctx: BusinessContext, plan: unknown): Promise<BillingCheckoutResult> {
     this.requireConfigured();
     await this.requireSelfBilled(ctx.businessId);
-    if (!isPlanKey(plan)) throw new BadRequestException("plan must be starter, growth or pro");
+    const chosen = (await publicPlans()).find((p) => p.key === plan);
+    if (!chosen) throw new BadRequestException("That plan isn't available");
+    if (!priceFor(chosen)) throw new BadRequestException(`${chosen.name} can't be bought online yet. Contact us to get it.`);
     const account = await this.ensureCustomer(ctx);
 
     if (account.stripeSubscriptionId && account.status && CURRENT.has(account.status)) {
-      await this.switchPlan(account, plan);
+      await this.switchPlan(account, chosen);
       return { overview: await this.overview(ctx) };
     }
 
@@ -73,8 +70,12 @@ export class BillingService {
         mode: "subscription",
         customer: account.stripeCustomerId,
         client_reference_id: ctx.businessId,
-        line_items: [{ price: priceFor(plan), quantity: 1 }],
-        subscription_data: { metadata: { businessId: ctx.businessId } },
+        line_items: [{ price: priceFor(chosen), quantity: 1 }],
+        subscription_data: {
+          metadata: { businessId: ctx.businessId },
+          // The plan's trial, only for a workspace's first Stripe subscription.
+          ...(chosen.trialDays > 0 && !account.stripeSubscriptionId && { trial_period_days: chosen.trialDays }),
+        },
         allow_promotion_codes: true,
         success_url: `${config.webAppUrl}${BILLING_PAGE}?checkout=success`,
         cancel_url: `${config.webAppUrl}${BILLING_PAGE}?checkout=cancelled`,
@@ -176,8 +177,11 @@ export class BillingService {
     if (account.stripeSubscriptionId && account.stripeSubscriptionId !== subscription.id && subscription.status === "canceled") return;
 
     const item = subscription.items.data[0];
-    const plan = planForPrice(item?.price.id);
+    const plan = await planForPrice(item?.price.id);
     const card = await this.cardOf(subscription);
+    const ended = subscription.status === "canceled";
+    // Stripe now pays for the plan: a running admin grant (e.g. a trial) stops.
+    if (!ended) await endGrants(account.businessId, "stripe");
     await prisma.$transaction([
       prisma.billingAccount.update({
         where: { id: account.id },
@@ -189,10 +193,10 @@ export class BillingService {
           ...(card ? { cardBrand: card.brand, cardLast4: card.last4 } : {}),
         },
       }),
-      // An ended subscription drops to the smallest plan's limits.
+      // An ended subscription drops to the default plan's limits.
       prisma.business.update({
         where: { id: account.businessId },
-        data: { plan: subscription.status === "canceled" ? "starter" : plan ?? undefined },
+        data: { plan: ended ? (await defaultPlan()).key : plan?.key ?? undefined },
       }),
     ]);
   }
@@ -209,12 +213,12 @@ export class BillingService {
 
   // --- Helpers -----------------------------------------------------------------
 
-  private async switchPlan(account: AccountRow, plan: PlanKey) {
+  private async switchPlan(account: AccountRow, plan: PlanRecord) {
     try {
       const current = await stripe().subscriptions.retrieve(account.stripeSubscriptionId!);
       const item = current.items.data[0];
       if (item?.price.id === priceFor(plan) && !current.cancel_at_period_end) {
-        throw new BadRequestException(`You're already on ${planFor(plan).name}`);
+        throw new BadRequestException(`You're already on ${plan.name}`);
       }
       const updated = await stripe().subscriptions.update(current.id, {
         items: [{ id: item.id, price: priceFor(plan) }],
@@ -284,7 +288,7 @@ export class BillingService {
 
   private requireConfigured() {
     if (!billingConfigured()) {
-      throw new BadRequestException("Payments aren't set up on this server yet. Change the plan directly instead.");
+      throw new BadRequestException("Online payments aren't set up yet. Contact us to change your plan.");
     }
   }
 }

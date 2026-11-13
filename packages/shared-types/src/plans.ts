@@ -3,7 +3,10 @@
 // (UTC); total meters count what exists right now. Limits are enforced where
 // the thing is used or created (see bot-service usage/quota.ts).
 
-export type PlanKey = "starter" | "growth" | "pro";
+// Plans live in the database (Plan table, managed in the admin panel); a key is any plan's key.
+// PLANS below are the original three: the seed data and a fallback when the table can't be read.
+export type PlanKey = string;
+export type PlanInterval = "month" | "year";
 
 export type UsageMeterKey =
   | "ai_replies"
@@ -52,6 +55,19 @@ export interface PlanDefinition {
   priceUsd: number;
   description: string;
   limits: Record<UsageMeterKey, number>;
+  /** Billing period priceUsd is for. */
+  interval?: PlanInterval;
+  /** Free days before the first Stripe charge. */
+  trialDays?: number;
+}
+
+/** A plan the Suuper team gave the workspace outside Stripe (admin panel). */
+export interface PlanGrantSummary {
+  kind: "trial" | "paid" | "free";
+  planKey: PlanKey;
+  startsAt: string;
+  /** Absent: no end date. */
+  endsAt?: string;
 }
 
 const MB = 1024 * 1024;

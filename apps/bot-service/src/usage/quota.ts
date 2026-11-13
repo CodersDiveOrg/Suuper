@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus } from "@nestjs/common";
-import { knowledgeStorageBytes, memberSeats, prisma } from "@platform/database";
-import { monthBounds, planFor, quotaExceededBody, type PlanDefinition, type UsageMeterKey } from "@platform/shared-types";
+import { effectivePlan, knowledgeStorageBytes, memberSeats, prisma } from "@platform/database";
+import { monthBounds, quotaExceededBody, type PlanDefinition, type UsageMeterKey } from "@platform/shared-types";
 import { findModel, providerKey } from "../agents/runtime/models";
 
 /** 402 with a message people can act on; `code` lets clients tell it apart from other errors. */
@@ -13,9 +13,9 @@ export class QuotaExceededException extends HttpException {
   }
 }
 
+/** The plan whose limits apply now; ends expired admin grants first (see @platform/database plans.ts). */
 export async function planOf(businessId: string): Promise<PlanDefinition> {
-  const business = await prisma.business.findUnique({ where: { id: businessId }, select: { plan: true } });
-  return planFor(business?.plan);
+  return effectivePlan(businessId);
 }
 
 /** Current value of a meter: this month's for monthly meters, what exists now for totals. */

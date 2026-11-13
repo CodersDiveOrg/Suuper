@@ -332,6 +332,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@platform/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
       '@prisma/client':
         specifier: ^5.22.0
         version: 5.22.0(prisma@5.22.0)

@@ -159,7 +159,7 @@ export class AgenciesService {
       id: row.id,
       name: row.name,
       slug: row.slug,
-      plan: planFor(row.plan).key,
+      plan: row.plan,
       memberCount: row._count.memberships,
       botCount: row._count.bots,
       appCount: row._count.apps,
