@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Put, Req } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post, Put, Req } from "@nestjs/common";
 import { RequirePermission } from "@platform/shared-auth";
 import type { BusinessContext } from "@platform/shared-types";
 import { IntegrationsService } from "./integrations.service";
@@ -17,6 +17,39 @@ export class IntegrationsController {
   @RequirePermission("integrations:read")
   async list(@Req() request: { businessContext: BusinessContext }) {
     return this.integrationsService.list(request.businessContext.businessId);
+  }
+
+  /** "Connect with …" step 1 → { url } of the provider's consent screen. Body: { values?: pre-fields } */
+  @Post(":provider/oauth/start")
+  @RequirePermission("integrations:write")
+  startOAuth(
+    @Req() request: { businessContext: BusinessContext },
+    @Param("provider") provider: string,
+    @Body() body: { values?: unknown },
+  ) {
+    const { businessId, userId } = request.businessContext;
+    return this.integrationsService.startOAuth(businessId, userId, provider, body);
+  }
+
+  /** Step 2, called by the web app's /oauth/callback page with the provider's code + state. */
+  @Post("oauth/complete")
+  @HttpCode(200)
+  @RequirePermission("integrations:write")
+  completeOAuth(@Req() request: { businessContext: BusinessContext }, @Body() body: { code?: unknown; state?: unknown }) {
+    const { businessId, userId } = request.businessContext;
+    return this.integrationsService.completeOAuth(businessId, userId, body ?? {});
+  }
+
+  /** WhatsApp Embedded Signup finished in the browser. Body: { code, wabaId, phoneNumberId } */
+  @Post("whatsapp/signup")
+  @HttpCode(200)
+  @RequirePermission("integrations:write")
+  completeWhatsAppSignup(
+    @Req() request: { businessContext: BusinessContext },
+    @Body() body: { code?: unknown; wabaId?: unknown; phoneNumberId?: unknown },
+  ) {
+    const { businessId, userId } = request.businessContext;
+    return this.integrationsService.completeWhatsAppSignup(businessId, userId, body ?? {});
   }
 
   /** Connect, or update an existing connection's fields. */

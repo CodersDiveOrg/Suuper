@@ -1,6 +1,8 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, Logger } from "@nestjs/common";
 import { prisma } from "@platform/database";
-import { decryptJson } from "@platform/shared-auth";
+import { decryptJson, encryptJson, refreshOAuthSecrets } from "@platform/shared-auth";
+
+const oauthLogger = new Logger("IntegrationOAuth");
 
 export type ProviderName = "anthropic" | "openai" | "gemini" | "ollama";
 /** Providers reached with an API key (the business's own or Suuper's). */
@@ -141,11 +143,29 @@ export async function integrationCredentials(
     where: { businessId_provider: { businessId, provider } },
   });
   if (!connection?.enabled) return null;
+  const config = connection.config as Record<string, string>;
+  let secrets: Record<string, string>;
   try {
-    return { ...(connection.config as Record<string, string>), ...decryptJson<Record<string, string>>(connection.secretsEncrypted) };
+    secrets = decryptJson<Record<string, string>>(connection.secretsEncrypted);
   } catch {
     return null;
   }
+
+  // Connected with OAuth and the access token is (nearly) expired: refresh and store it.
+  try {
+    const refreshed = await refreshOAuthSecrets(provider, config, secrets);
+    if (refreshed) {
+      secrets = refreshed;
+      await prisma.integrationConnection.update({
+        where: { id: connection.id },
+        data: { secretsEncrypted: encryptJson(refreshed) },
+      });
+    }
+  } catch (err) {
+    // Use the old token anyway: the provider's error is clearer than ours.
+    oauthLogger.warn(`Couldn't refresh ${provider} OAuth token for ${businessId}: ${(err as Error).message}`);
+  }
+  return { ...config, ...secrets };
 }
 
 export function cloudProvider(key: string): CloudProviderInfo | undefined {

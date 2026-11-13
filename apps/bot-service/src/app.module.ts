@@ -11,9 +11,10 @@ import { ChannelsModule } from "./channels/channels.module";
 import { ConversationsModule } from "./conversations/conversations.module";
 import { BillingModule } from "./billing/billing.module";
 import { AiModelsModule } from "./ai-models/ai-models.module";
+import { AssistantModule } from "./assistant/assistant.module";
 
 @Module({
-  imports: [BotsModule, AgentsModule, WorkflowsModule, AppsModule, AnalyticsModule, WebhooksModule, UsageModule, ChannelsModule, ConversationsModule, BillingModule, AiModelsModule],
+  imports: [BotsModule, AgentsModule, WorkflowsModule, AppsModule, AnalyticsModule, WebhooksModule, UsageModule, ChannelsModule, ConversationsModule, BillingModule, AiModelsModule, AssistantModule],
   controllers: [HealthController],
 })
 export class AppModule {}

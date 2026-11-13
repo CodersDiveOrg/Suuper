@@ -172,6 +172,8 @@ export interface BotChannel {
     webhookUrl: string;
     /** WhatsApp only: the verify token Meta asks for alongside the callback URL. */
     verifyToken?: string;
+    /** WhatsApp connected with "Continue with Facebook": the webhook is registered for you. */
+    autoWebhook?: boolean;
     messageCount: number;
     lastMessageAt?: string;
     lastError?: string;

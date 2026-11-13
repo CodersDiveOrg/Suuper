@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { prisma } from "@platform/database";
 import { loadServiceConfig } from "@platform/shared-config";
+import { subscribeWhatsAppWebhook, unsubscribeWhatsAppWebhook } from "@platform/shared-auth";
 import type { BotChannel, ChannelMessage, ChannelProvider } from "@platform/shared-types";
 import { BotsService, type ChatHistoryTurn } from "../bots/bots.service";
 import { integrationCredentials } from "../agents/runtime/models";
@@ -34,6 +35,11 @@ export function contactFromSessionKey(provider: string, sessionKey: string | nul
   return sessionKey?.startsWith(`${provider}-`) ? sessionKey.slice(provider.length + 1) : null;
 }
 
+/** Connected by signing in (WhatsApp Embedded Signup) rather than pasted credentials. */
+function viaSignIn(config: Record<string, string> | null | undefined) {
+  return config?.connectedVia === "oauth";
+}
+
 function errorMessage(err: unknown): string {
   return (err instanceof Error ? err.message : String(err)).slice(0, 500);
 }
@@ -49,13 +55,18 @@ export class ChannelsService {
       prisma.botChannel.findMany({ where: { businessId } }),
       prisma.integrationConnection.findMany({
         where: { businessId, provider: { in: CHANNEL_PROVIDERS }, enabled: true },
-        select: { provider: true },
+        select: { provider: true, config: true },
       }),
     ]);
     const connected = new Set(connections.map((c) => c.provider));
+    const signedIn = new Set(connections.filter((c) => viaSignIn(c.config as Record<string, string>)).map((c) => c.provider));
     return CHANNEL_PROVIDERS.map((provider) => {
       const channel = channels.find((c) => c.provider === provider);
-      return { provider, integrationConnected: connected.has(provider), channel: channel ? this.serialize(channel) : null };
+      return {
+        provider,
+        integrationConnected: connected.has(provider),
+        channel: channel ? this.serialize(channel, signedIn.has(provider)) : null,
+      };
     });
   }
 
@@ -87,7 +98,21 @@ export class ChannelsService {
         throw new BadRequestException(`Telegram refused the webhook: ${errorMessage(err)}`);
       }
     }
-    return { provider: p, integrationConnected: true, channel: this.serialize(channel) };
+    // Connected with "Continue with Facebook": point the WhatsApp Business account's
+    // webhooks at this channel. Done on every save while enabled (it's idempotent),
+    // so reconnecting a different number and saving again fixes the subscription.
+    const autoWebhook = p === "whatsapp" && viaSignIn(creds);
+    if (autoWebhook && (enabled || existing?.enabled)) {
+      try {
+        if (enabled) await subscribeWhatsAppWebhook(creds, webhookUrl(channel.webhookKey), channel.verifyToken);
+        else await unsubscribeWhatsAppWebhook(creds);
+        channel = await prisma.botChannel.update({ where: { id: channel.id }, data: { lastError: null } });
+      } catch (err) {
+        await prisma.botChannel.update({ where: { id: channel.id }, data: { enabled: false, lastError: errorMessage(err) } });
+        throw new BadRequestException(`WhatsApp refused the webhook: ${errorMessage(err)}`);
+      }
+    }
+    return { provider: p, integrationConnected: true, channel: this.serialize(channel, autoWebhook) };
   }
 
   async remove(businessId: string, provider: string) {
@@ -98,6 +123,10 @@ export class ChannelsService {
       const creds = await integrationCredentials(businessId, p);
       // Best effort: the token may already be revoked.
       if (creds) await deleteTelegramWebhook(creds).catch(() => undefined);
+    }
+    if (p === "whatsapp" && channel.enabled) {
+      const creds = await integrationCredentials(businessId, p);
+      if (creds && viaSignIn(creds)) await unsubscribeWhatsAppWebhook(creds).catch(() => undefined);
     }
     await prisma.botChannel.delete({ where: { id: channel.id } });
   }
@@ -257,13 +286,13 @@ export class ChannelsService {
     return provider as ChannelProvider;
   }
 
-  private serialize(channel: ChannelRow): NonNullable<BotChannel["channel"]> {
+  private serialize(channel: ChannelRow, autoWebhook = false): NonNullable<BotChannel["channel"]> {
     return {
       id: channel.id,
       botId: channel.botId,
       enabled: channel.enabled,
       webhookUrl: webhookUrl(channel.webhookKey),
-      ...(channel.provider === "whatsapp" ? { verifyToken: channel.verifyToken } : {}),
+      ...(channel.provider === "whatsapp" ? { verifyToken: channel.verifyToken, ...(autoWebhook ? { autoWebhook } : {}) } : {}),
       messageCount: channel.messageCount,
       lastMessageAt: channel.lastMessageAt?.toISOString(),
       lastError: channel.lastError ?? undefined,
