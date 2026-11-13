@@ -6,6 +6,15 @@ import { forwardTo, streamTo } from "./forward";
 // Agents live in bot-service alongside Bots — same target service.
 const botServiceUrl = loadServiceConfig("api-gateway", 3010).botServiceUrl;
 
+// The home-page assistant always streams (SSE).
+@Controller("businesses/current/assistant/messages")
+export class AssistantStreamProxyController {
+  @Post()
+  handle(@Req() req: Request, @Res() res: Response) {
+    return streamTo(botServiceUrl, req, res);
+  }
+}
+
 // Sending a message can stream (SSE), so it's piped rather than buffered.
 // Registered before AgentsProxyController so this route wins.
 @Controller("businesses/current/agents/:agentId/conversations/:conversationId/messages")

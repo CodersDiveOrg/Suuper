@@ -28,6 +28,29 @@ const json = { "Content-Type": "application/json" };
 const required = (description: string): ActionParam => ({ type: "string", description, required: true });
 const optional = (description: string): ActionParam => ({ type: "string", description });
 
+// Connected with OAuth, Pipedrive and Jira are called differently from an API token:
+// Pipedrive on the account's api_domain with a Bearer token, Jira through
+// Atlassian's API gateway for the site (cloudId).
+function pipedrive(c: Creds, path: string, headers: Record<string, string> = {}) {
+  if (c.accessToken) {
+    const domain = c.apiDomain || `https://${encodeURIComponent(c.companyDomain)}.pipedrive.com`;
+    return { url: `${domain}${path}`, headers: { ...headers, Authorization: `Bearer ${c.accessToken}` } };
+  }
+  const sep = path.includes("?") ? "&" : "?";
+  return {
+    url: `https://${encodeURIComponent(c.companyDomain)}.pipedrive.com${path}${sep}api_token=${encodeURIComponent(c.apiToken)}`,
+    headers,
+  };
+}
+
+function jiraApi(c: Creds) {
+  return c.accessToken && c.cloudId ? `https://api.atlassian.com/ex/jira/${encodeURIComponent(c.cloudId)}` : baseUrl(c.siteUrl);
+}
+
+function jiraAuth(c: Creds): Record<string, string> {
+  return c.accessToken ? { Authorization: `Bearer ${c.accessToken}` } : { Authorization: basicAuth(c.email, c.apiToken) };
+}
+
 /** Provider key (matches the Integrations catalog) -> the actions agents and bots can call. */
 export const INTEGRATION_ACTIONS: Record<string, IntegrationAction[]> = {
   // --- Messaging -------------------------------------------------------------
@@ -246,7 +269,7 @@ export const INTEGRATION_ACTIONS: Record<string, IntegrationAction[]> = {
       params: { term: required("Search text, at least 2 characters.") },
       run: async (c, i) => {
         const data = await request<{ data?: { items: { item: { id: number; name: string; emails?: string[]; phones?: string[]; organization?: { name: string } } }[] } }>({
-          url: `https://${encodeURIComponent(c.companyDomain)}.pipedrive.com/api/v1/persons/search?term=${encodeURIComponent(i.term)}&limit=10&api_token=${encodeURIComponent(c.apiToken)}`,
+          ...pipedrive(c, `/api/v1/persons/search?term=${encodeURIComponent(i.term)}&limit=10`),
         });
         return (data.data?.items ?? []).map(({ item }) => ({ id: item.id, name: item.name, emails: item.emails, phones: item.phones, organization: item.organization?.name }));
       },
@@ -258,9 +281,8 @@ export const INTEGRATION_ACTIONS: Record<string, IntegrationAction[]> = {
       params: { name: required("Full name."), email: optional("Email address."), phone: optional("Phone number.") },
       run: async (c, i) => {
         const data = await request<{ data: { id: number } }>({
-          url: `https://${encodeURIComponent(c.companyDomain)}.pipedrive.com/api/v1/persons?api_token=${encodeURIComponent(c.apiToken)}`,
+          ...pipedrive(c, "/api/v1/persons", json),
           method: "POST",
-          headers: json,
           data: { name: i.name, ...(i.email ? { email: [i.email] } : {}), ...(i.phone ? { phone: [i.phone] } : {}) },
         });
         return { created: true, id: data.data.id };
@@ -660,9 +682,9 @@ export const INTEGRATION_ACTIONS: Record<string, IntegrationAction[]> = {
       },
       run: async (c, i) => {
         const data = await request<{ key: string }>({
-          url: `${baseUrl(c.siteUrl)}/rest/api/3/issue`,
+          url: `${jiraApi(c)}/rest/api/3/issue`,
           method: "POST",
-          headers: { ...json, Authorization: basicAuth(c.email, c.apiToken) },
+          headers: { ...json, ...jiraAuth(c) },
           data: {
             fields: {
               project: { key: i.project_key },
@@ -684,8 +706,8 @@ export const INTEGRATION_ACTIONS: Record<string, IntegrationAction[]> = {
       params: { jql: required("JQL query.") },
       run: async (c, i) => {
         const data = await request<{ issues: { key: string; fields: { summary: string; status: { name: string } } }[] }>({
-          url: `${baseUrl(c.siteUrl)}/rest/api/3/search/jql?maxResults=10&fields=summary,status&jql=${encodeURIComponent(i.jql)}`,
-          headers: { Authorization: basicAuth(c.email, c.apiToken), Accept: "application/json" },
+          url: `${jiraApi(c)}/rest/api/3/search/jql?maxResults=10&fields=summary,status&jql=${encodeURIComponent(i.jql)}`,
+          headers: { ...jiraAuth(c), Accept: "application/json" },
         });
         return data.issues.map((it) => ({ key: it.key, summary: it.fields.summary, status: it.fields.status.name }));
       },
@@ -702,7 +724,7 @@ export const INTEGRATION_ACTIONS: Record<string, IntegrationAction[]> = {
           request<{ data?: T; errors?: { message: string }[] }>({
             url: "https://api.linear.app/graphql",
             method: "POST",
-            headers: { ...json, Authorization: c.apiKey },
+            headers: { ...json, Authorization: c.accessToken ? `Bearer ${c.accessToken}` : c.apiKey },
             data: { query, variables },
           }).then((r) => {
             if (r.errors?.length) throw new ActionError(`Linear: ${r.errors[0].message}`);

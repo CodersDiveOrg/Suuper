@@ -1,6 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { prisma } from "@platform/database";
-import { decryptJson, encryptJson } from "@platform/shared-auth";
+import {
+  buildAuthorizeUrl,
+  completeOAuth,
+  completeWhatsAppSignup,
+  whatsappSignupInfo,
+  decryptJson,
+  encryptJson,
+  oauthInfo,
+  readOAuthState,
+} from "@platform/shared-auth";
+import { loadServiceConfig } from "@platform/shared-config";
 import {
   INTEGRATION_PROVIDERS,
   type IntegrationDto,
@@ -16,6 +26,10 @@ interface ConnectInput {
 }
 
 const MAX_FIELD_LENGTH = 4000;
+
+const config = loadServiceConfig("identity-service", 3001);
+/** Where providers send the browser back. Register this URL in each provider's OAuth app. */
+const OAUTH_REDIRECT_URI = `${config.webAppUrl}/oauth/callback`;
 
 function mask(secret: string) {
   return secret.length <= 4 ? "••••" : `••••${secret.slice(-4)}`;
@@ -50,11 +64,20 @@ export class IntegrationsService {
     });
     const storedSecrets = existing ? this.tryDecrypt(existing.secretsEncrypted) : {};
 
-    const config: Values = {};
-    const secrets: Values = {};
+    // Connected with OAuth: the tokens aren't the form's secret fields, so keep
+    // them all and only let the plain settings (default channel, base ID…) change.
+    const viaOAuth = (existing?.config as Values | undefined)?.connectedVia === "oauth";
+    const config: Values = viaOAuth ? { ...(existing!.config as Values) } : {};
+    const secrets: Values = viaOAuth ? { ...storedSecrets } : {};
     for (const field of provider.fields) {
+      if (viaOAuth && field.type === "secret") continue;
       const value = values[field.key]?.trim() ?? "";
       const resolved = field.type === "secret" ? value || storedSecrets[field.key] || "" : value;
+      if (viaOAuth) {
+        if (resolved) config[field.key] = resolved;
+        else if (field.key in values) delete config[field.key];
+        continue;
+      }
       if (field.required && !resolved) {
         throw new BadRequestException(`${field.label} is required`);
       }
@@ -68,6 +91,89 @@ export class IntegrationsService {
     await prisma.integrationConnection.upsert({
       where: { businessId_provider: { businessId, provider: provider.key } },
       update: data,
+      create: { ...data, businessId, provider: provider.key, connectedByUserId: userId },
+    });
+    return this.getOne(businessId, provider);
+  }
+
+  /** Step 1 of "Connect with …": the provider's consent-screen URL to send the browser to. */
+  startOAuth(businessId: string, userId: string, providerKey: string, input: unknown) {
+    const provider = this.requireProvider(providerKey);
+    if (!oauthInfo(provider.key)) throw new BadRequestException(`${provider.name} can't be connected with OAuth`);
+    try {
+      return {
+        url: buildAuthorizeUrl({
+          provider: provider.key,
+          businessId,
+          userId,
+          redirectUri: OAUTH_REDIRECT_URI,
+          input: this.validValues((input as { values?: unknown } | undefined)?.values),
+        }),
+      };
+    } catch (err) {
+      throw new BadRequestException((err as Error).message);
+    }
+  }
+
+  /** Step 2: the web app's /oauth/callback page hands over the code; store the tokens. */
+  async completeOAuth(businessId: string, userId: string, body: { code?: unknown; state?: unknown }) {
+    if (typeof body.code !== "string" || typeof body.state !== "string" || !body.code || !body.state) {
+      throw new BadRequestException("code and state are required");
+    }
+    let result: Awaited<ReturnType<typeof completeOAuth>>;
+    let providerKey: string;
+    try {
+      const state = readOAuthState(body.state, { businessId, userId });
+      providerKey = state.provider;
+      result = await completeOAuth(state, body.code, OAUTH_REDIRECT_URI);
+    } catch (err) {
+      throw new BadRequestException((err as Error).message);
+    }
+
+    return this.storeSignedInConnection(businessId, userId, this.requireProvider(providerKey), result);
+  }
+
+  /** WhatsApp's Embedded Signup popup finished: { code, wabaId, phoneNumberId } from the browser. */
+  async completeWhatsAppSignup(businessId: string, userId: string, body: { code?: unknown; wabaId?: unknown; phoneNumberId?: unknown }) {
+    if (typeof body.code !== "string" || !body.code) throw new BadRequestException("code is required");
+    let result: Awaited<ReturnType<typeof completeWhatsAppSignup>>;
+    try {
+      result = await completeWhatsAppSignup({
+        code: body.code,
+        wabaId: String(body.wabaId ?? ""),
+        phoneNumberId: String(body.phoneNumberId ?? ""),
+      });
+    } catch (err) {
+      throw new BadRequestException((err as Error).message);
+    }
+    return this.storeSignedInConnection(businessId, userId, this.requireProvider("whatsapp"), result);
+  }
+
+  /** Saves a connection made by signing in (OAuth / Embedded Signup), replacing any manual one. */
+  private async storeSignedInConnection(
+    businessId: string,
+    userId: string,
+    provider: IntegrationProvider,
+    result: { config: Values; secrets: Values },
+  ) {
+    const existing = await prisma.integrationConnection.findUnique({
+      where: { businessId_provider: { businessId, provider: provider.key } },
+    });
+    // Keep plain settings the business already set (default channel, base ID…).
+    const previousConfig = (existing?.config ?? {}) as Values;
+    const keep = Object.fromEntries(
+      provider.fields
+        .filter((f) => f.type !== "secret" && previousConfig[f.key] && !(f.key in result.config))
+        .map((f) => [f.key, previousConfig[f.key]]),
+    );
+    const data = {
+      config: { ...keep, ...result.config },
+      secretsEncrypted: encryptJson(result.secrets),
+      enabled: true,
+    };
+    await prisma.integrationConnection.upsert({
+      where: { businessId_provider: { businessId, provider: provider.key } },
+      update: { ...data, connectedByUserId: userId },
       create: { ...data, businessId, provider: provider.key, connectedByUserId: userId },
     });
     return this.getOne(businessId, provider);
@@ -124,15 +230,22 @@ export class IntegrationsService {
       | undefined,
     connectedBy: string | undefined,
   ): IntegrationDto {
-    if (!connection) return { ...provider, connection: null };
+    const oauth = oauthInfo(provider.key);
+    const whatsappSignup = provider.key === "whatsapp" ? whatsappSignupInfo() : undefined;
+    const base = { ...provider, ...(oauth ? { oauth } : {}), ...(whatsappSignup ? { whatsappSignup } : {}) };
+    if (!connection) return { ...base, connection: null };
 
     const secrets = this.tryDecrypt(connection.secretsEncrypted);
     return {
-      ...provider,
+      ...base,
       connection: {
         enabled: connection.enabled,
         config: (connection.config ?? {}) as Values,
-        secretHints: Object.fromEntries(Object.entries(secrets).map(([k, v]) => [k, mask(v)])),
+        secretHints: Object.fromEntries(
+          Object.entries(secrets)
+            .filter(([k]) => !k.startsWith("oauth"))
+            .map(([k, v]) => [k, mask(v)]),
+        ),
         connectedAt: connection.createdAt.toISOString(),
         updatedAt: connection.updatedAt.toISOString(),
         connectedBy,

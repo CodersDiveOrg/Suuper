@@ -59,23 +59,30 @@ export async function chatWithUsage(
   model?: string,
   options: ChatOptions = {},
 ): Promise<{ content: string; model: string; usage: { inputTokens: number; outputTokens: number } }> {
-  const modelName = model ?? defaultChatModel();
+  let modelName = model ?? defaultChatModel();
   const modelOptions = {
     ...(options.maxTokens ? { num_predict: options.maxTokens } : {}),
     ...(options.contextTokens ? { num_ctx: options.contextTokens } : {}),
   };
-  const response = await fetch(`${baseUrl()}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelName,
-      messages,
-      stream: false,
-      ...(options.format ? { format: options.format } : {}),
-      ...(Object.keys(modelOptions).length > 0 ? { options: modelOptions } : {}),
-    }),
-    ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
-  });
+  const send = (name: string) =>
+    fetch(`${baseUrl()}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: name,
+        messages,
+        stream: false,
+        ...(options.format ? { format: options.format } : {}),
+        ...(Object.keys(modelOptions).length > 0 ? { options: modelOptions } : {}),
+      }),
+      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+    });
+  let response = await send(modelName);
+  const fallback = await installedFallback(response, modelName);
+  if (fallback) {
+    modelName = fallback;
+    response = await send(modelName);
+  }
   if (!response.ok) {
     throw new Error(`Ollama chat request failed (${response.status}): ${await response.text()}`);
   }
@@ -89,6 +96,21 @@ export async function chatWithUsage(
     model: modelName,
     usage: { inputTokens: data.prompt_eval_count ?? 0, outputTokens: data.eval_count ?? 0 },
   };
+}
+
+/**
+ * A bot can be saved with a local model this server hasn't pulled (e.g. llama3.2:3b on a small
+ * VPS that only runs llama3.2:1b). When Ollama answers 404 "model not found" for such a model,
+ * returns the server's configured OLLAMA_CHAT_MODEL to retry with; otherwise null, leaving the
+ * response untouched.
+ */
+export async function installedFallback(response: Response, model: string): Promise<string | null> {
+  const configured = process.env.OLLAMA_CHAT_MODEL;
+  if (response.status !== 404 || !configured || configured === model) return null;
+  if (!/not found/i.test(await response.clone().text())) return null;
+  await response.body?.cancel();
+  console.warn(`[ollama] model '${model}' is not installed; answering with '${configured}' instead`);
+  return configured;
 }
 
 /** Formats an embedding for a raw-SQL pgvector literal, e.g. writing/querying Product.embedding. */

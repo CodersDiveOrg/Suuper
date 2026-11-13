@@ -608,6 +608,17 @@ export function findIntegrationProvider(key: string): IntegrationProvider | unde
 
 /** A provider plus this business's connection to it, if any. Secrets are never returned. */
 export interface IntegrationDto extends IntegrationProvider {
+  /**
+   * Present when the provider can be connected with OAuth ("Connect with …").
+   * configured: false means this server has no OAuth app for it yet.
+   * preFields: asked before redirecting (e.g. Shopify's store domain).
+   */
+  oauth?: {
+    configured: boolean;
+    preFields: { key: string; label: string; placeholder?: string; help?: string }[];
+  };
+  /** WhatsApp only, when the server is set up for Meta's Embedded Signup popup. */
+  whatsappSignup?: { appId: string; configId: string; graphVersion: string };
   connection: {
     enabled: boolean;
     config: Record<string, string>;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ContentBlockParam, MessageParam, ModelProvider, TurnRequest, TurnResult } from "./types";
 import { recordAiCall } from "../../../usage/meter";
+import { installedFallback } from "@platform/shared-ai";
 
 const baseUrl = () => process.env.OLLAMA_URL ?? "http://localhost:11434";
 
@@ -53,19 +54,27 @@ function toOllamaMessages(system: string, messages: MessageParam[]): OllamaMessa
 
 export class OllamaProvider implements ModelProvider {
   async runTurn(request: TurnRequest, onText: (delta: string) => void): Promise<TurnResult> {
-    const response = await fetch(`${baseUrl()}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: request.model,
-        stream: true,
-        messages: toOllamaMessages(request.system, request.messages),
-        tools: request.tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.input_schema },
-        })),
-      }),
-    });
+    const send = (name: string) =>
+      fetch(`${baseUrl()}/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: name,
+          stream: true,
+          messages: toOllamaMessages(request.system, request.messages),
+          tools: request.tools.map((t) => ({
+            type: "function",
+            function: { name: t.name, description: t.description, parameters: t.input_schema },
+          })),
+        }),
+      });
+    let model = request.model;
+    let response = await send(model);
+    const fallback = await installedFallback(response, model);
+    if (fallback) {
+      model = fallback;
+      response = await send(model);
+    }
     if (!response.ok || !response.body) {
       throw new Error(`Ollama request failed (${response.status}): ${await response.text()}`);
     }
@@ -99,7 +108,7 @@ export class OllamaProvider implements ModelProvider {
     for (const call of toolCalls) {
       content.push({ type: "tool_use", id: `toolu_${randomUUID().replace(/-/g, "")}`, name: call.function.name, input: call.function.arguments ?? {} });
     }
-    recordAiCall(request.model, "ollama", usage);
+    recordAiCall(model, "ollama", usage);
     return { content, stopReason: toolCalls.length ? "tool_use" : "end_turn", usage };
   }
 }
